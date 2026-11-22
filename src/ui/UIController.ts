@@ -40,6 +40,19 @@ export class UIController {
     this.setOverlay('pause');
   }
 
+  showRuntimeError(error: unknown): void {
+    this.setOverlay('pause');
+    const existing = this.root.querySelector<HTMLElement>('#runtime-error');
+    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const safeDetail = esc(detail.slice(0, 700));
+    const panel = existing ?? document.createElement('div');
+    panel.id = 'runtime-error';
+    panel.className = 'runtime-error';
+    panel.innerHTML = `<strong>GAME LOOP PAUSED</strong><span>The simulator caught a runtime error instead of silently freezing.</span><code>${safeDetail}</code><button type="button" id="runtime-reload">RELOAD GAME</button>`;
+    if (!existing) this.root.append(panel);
+    panel.querySelector<HTMLButtonElement>('#runtime-reload')?.addEventListener('click', () => window.location.reload(), { once: true });
+  }
+
   setHudVisible(visible: boolean): void {
     this.hudVisible = visible;
     this.root.querySelector<HTMLElement>('#hud')?.classList.toggle('hidden', !visible);

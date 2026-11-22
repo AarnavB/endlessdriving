@@ -23,6 +23,15 @@ npm run build
 npm run preview
 ```
 
+## 0.1.1 gameplay hotfix
+
+This build fixes the Phase 1 driving-loop issues:
+
+- Replace the unsupported `RigidBody.applyForce()` call with Rapier JavaScript's `RigidBody.addForce()` method; clear the previous persistent force before applying each physics tick's propulsion, grip and drag. The old call could throw on the first update and stop all game simulation while audio had already started.
+- Synchronize the car mesh immediately on spawn/reset and snap the camera to the correct chase-camera position.
+- Capture keyboard input at document level, retain one-shot gear changes until a physics tick consumes them, and show a visible diagnostic panel if a runtime exception interrupts the game loop.
+- Improve steering authority and reverse behavior, correct the tire-to-road visual alignment, and instance the lane markings to reduce draw calls.
+
 ## Phase 1 includes
 
 - A controllable sports-car prototype with throttle, braking, reverse, steering, handbrake, a six-speed automatic gearbox, and manual gear up/down inputs.

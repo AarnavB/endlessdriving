@@ -64,36 +64,55 @@ export class CityWorld {
       mesh.receiveShadow = true;
       roadGroup.add(mesh);
     };
+
     road(20, 500, 0, 0);
     for (const x of [-156, -104, -52, 52, 104, 156]) road(15, 500, x, 0);
     for (const z of [-156, -104, -52, 52, 104, 156]) road(500, 15, 0, z);
     this.scene.add(roadGroup);
 
+    // Use instancing for hundreds of small lane dashes. Individual Mesh objects
+    // caused excessive draw calls and stutter on integrated GPUs.
+    const unitBox = new THREE.BoxGeometry(1, 1, 1);
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xe9e2c5 });
     const yellowMat = new THREE.MeshBasicMaterial({ color: 0xe3b34b });
-    const markings = new THREE.Group();
+    const whiteTransforms: THREE.Matrix4[] = [];
+    const yellowTransforms: THREE.Matrix4[] = [];
+    const addDash = (target: THREE.Matrix4[], x: number, z: number, width: number, length: number): void => {
+      target.push(new THREE.Matrix4().compose(
+        new THREE.Vector3(x, 0.035, z),
+        new THREE.Quaternion(),
+        new THREE.Vector3(width, 0.025, length),
+      ));
+    };
+
     for (const x of [0, -156, -104, -52, 52, 104, 156]) {
       for (let z = -245; z <= 245; z += 13) {
-        if (Math.abs(x) < 1) {
-          for (const offset of [-0.16, 0.16]) {
-            const dash = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.025, 5.3), yellowMat);
-            dash.position.set(offset * 4, 0.035, z);
-            markings.add(dash);
-          }
+        if (x === 0) {
+          addDash(yellowTransforms, -0.64, z, 0.11, 5.3);
+          addDash(yellowTransforms, 0.64, z, 0.11, 5.3);
         } else {
-          const dash = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 4.2), lineMat);
-          dash.position.set(x + 4.2, 0.035, z);
-          markings.add(dash);
+          addDash(whiteTransforms, x + 4.2, z, 0.08, 4.2);
         }
       }
     }
     for (const z of [0, -156, -104, -52, 52, 104, 156]) {
       for (let x = -245; x <= 245; x += 13) {
-        const dash = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.025, 0.08), lineMat);
-        dash.position.set(x, 0.035, z + 4.2);
-        markings.add(dash);
+        addDash(whiteTransforms, x, z + 4.2, 4.2, 0.08);
       }
     }
+
+    const markings = new THREE.Group();
+    const whiteMesh = new THREE.InstancedMesh(unitBox, lineMat, whiteTransforms.length);
+    whiteTransforms.forEach((transform, index) => whiteMesh.setMatrixAt(index, transform));
+    whiteMesh.instanceMatrix.needsUpdate = true;
+    whiteMesh.computeBoundingSphere();
+    markings.add(whiteMesh);
+
+    const yellowMesh = new THREE.InstancedMesh(unitBox, yellowMat, yellowTransforms.length);
+    yellowTransforms.forEach((transform, index) => yellowMesh.setMatrixAt(index, transform));
+    yellowMesh.instanceMatrix.needsUpdate = true;
+    yellowMesh.computeBoundingSphere();
+    markings.add(yellowMesh);
     this.scene.add(markings);
   }
 
@@ -165,6 +184,8 @@ export class CityWorld {
       mesh.receiveShadow = true;
       matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
       mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingBox();
+      mesh.computeBoundingSphere();
       buildingGroup.add(mesh);
     });
     this.scene.add(buildingGroup);
@@ -211,10 +232,14 @@ export class CityWorld {
         const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.35), lampMat);
         lamp.position.copy(arm.position).add(new THREE.Vector3(x < 0 ? 0.6 : -0.6, -0.08, 0));
         group.add(lamp);
-        const point = new THREE.PointLight(0xffc98b, 0, 32, 2);
-        point.position.copy(lamp.position).add(new THREE.Vector3(0, -0.25, 0));
-        this.streetLights.push(point);
-        group.add(point);
+        // A small number of real point lights provide nighttime pools of light;
+        // the emissive lamp mesh carries the remaining street-light detail cheaply.
+        if (x < 0 && z % 88 === 0) {
+          const point = new THREE.PointLight(0xffc98b, 0, 28, 2);
+          point.position.copy(lamp.position).add(new THREE.Vector3(0, -0.25, 0));
+          this.streetLights.push(point);
+          group.add(point);
+        }
       }
     }
     for (let z = -190; z <= 190; z += 52) {

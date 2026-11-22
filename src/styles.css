@@ -140,3 +140,26 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
   .version-tag { font-size: 6px; }.eyebrow { font-size: 7px; }.hud-bottom { height: 54px; padding: 0 16px; }.drive-state { min-width: 0; }.bottom-left-caption { left: 16px; bottom: 65px; font-size: 6px; }
   .modal-panel { padding: 26px 22px 22px; }.controls-grid { grid-template-columns: 1fr; gap: 2px; }.modal-panel h2 { font-size: 38px; }
 }
+
+/* Explicit feedback when a runtime exception interrupts gameplay. */
+.runtime-error {
+  position: absolute;
+  z-index: 50;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: min(560px, calc(100vw - 32px));
+  padding: 16px 18px;
+  color: #f5f1e9;
+  background: rgba(14, 19, 26, .98);
+  border: 1px solid rgba(239, 131, 82, .72);
+  box-shadow: 0 18px 60px rgba(0,0,0,.5);
+  pointer-events: auto;
+}
+.runtime-error strong { color: #ef8354; font-size: 9px; letter-spacing: 1.6px; }
+.runtime-error span { color: #aeb8be; font-size: 10px; line-height: 1.5; }
+.runtime-error code { color: #ffd0b6; background: #080d13; padding: 9px; font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.runtime-error button { align-self: flex-start; padding: 9px 12px; color: #10151a; background: #ef8354; font-size: 8px; font-weight: 900; letter-spacing: 1.4px; }

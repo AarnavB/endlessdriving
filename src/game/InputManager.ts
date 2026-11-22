@@ -2,17 +2,20 @@ import type { InputState } from '../types';
 
 type GameAction = 'pause' | 'camera' | 'reset' | 'hud' | 'map' | 'interact' | 'transmission';
 
+/**
+ * Keyboard input is captured at document level (capture phase) so focus on a
+ * menu button cannot prevent the game from receiving driving keys.
+ * Edge-triggered keys are retained until a physics tick consumes them.
+ */
 export class InputManager {
   private readonly keys = new Set<string>();
   private readonly justPressed = new Set<string>();
   private readonly actionHandlers = new Map<GameAction, () => void>();
-  private focused = true;
 
-  constructor(private readonly target: Window = window) {
-    target.addEventListener('keydown', this.onKeyDown);
-    target.addEventListener('keyup', this.onKeyUp);
-    target.addEventListener('blur', this.onBlur);
-    target.addEventListener('focus', this.onFocus);
+  constructor(private readonly target: Document = document) {
+    target.addEventListener('keydown', this.onKeyDown, true);
+    target.addEventListener('keyup', this.onKeyUp, true);
+    window.addEventListener('blur', this.onBlur);
   }
 
   on(action: GameAction, handler: () => void): void {
@@ -20,47 +23,68 @@ export class InputManager {
   }
 
   getState(): InputState {
-    if (!this.focused) {
-      return { throttle: 0, brake: 0, steer: 0, handbrake: false, shiftUpPressed: false, shiftDownPressed: false };
-    }
-    const throttle = this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0;
-    const brake = this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0;
-    const left = this.keys.has('KeyA') || this.keys.has('ArrowLeft');
-    const right = this.keys.has('KeyD') || this.keys.has('ArrowRight');
-    const steer = Number(right) - Number(left);
     return {
-      throttle,
-      brake,
-      steer,
+      throttle: this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0,
+      brake: this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0,
+      steer: Number(this.keys.has('KeyD') || this.keys.has('ArrowRight'))
+        - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft')),
       handbrake: this.keys.has('Space'),
-      shiftUpPressed: this.consume('KeyE'),
-      shiftDownPressed: this.consume('KeyQ'),
+      shiftUpPressed: this.justPressed.has('KeyE'),
+      shiftDownPressed: this.justPressed.has('KeyQ'),
     };
   }
 
-  isDown(code: string): boolean { return this.keys.has(code); }
-
-  dispose(): void {
-    this.target.removeEventListener('keydown', this.onKeyDown);
-    this.target.removeEventListener('keyup', this.onKeyUp);
-    this.target.removeEventListener('blur', this.onBlur);
-    this.target.removeEventListener('focus', this.onFocus);
+  /** Clear one-shot gear input after a physics step has consumed it. */
+  consumeEdges(): void {
+    this.justPressed.delete('KeyE');
+    this.justPressed.delete('KeyQ');
   }
 
-  private consume(code: string): boolean {
-    const pressed = this.justPressed.has(code);
-    this.justPressed.delete(code);
-    return pressed;
+  /** Prevent a gear key pressed while paused from being applied after resume. */
+  drainEdges(): void {
+    this.consumeEdges();
+  }
+
+  isDown(code: string): boolean {
+    return this.keys.has(code);
+  }
+
+  dispose(): void {
+    this.target.removeEventListener('keydown', this.onKeyDown, true);
+    this.target.removeEventListener('keyup', this.onKeyUp, true);
+    window.removeEventListener('blur', this.onBlur);
+    this.keys.clear();
+    this.justPressed.clear();
+  }
+
+  private isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    return target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName);
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
-    const blocked = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
-    if (blocked.includes(event.code)) event.preventDefault();
-    if (!this.keys.has(event.code)) this.justPressed.add(event.code);
+    if (this.isEditableTarget(event.target)) return;
+
+    const handled = [
+      'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+      'Space', 'KeyE', 'KeyQ', 'KeyC', 'KeyR', 'KeyH', 'KeyN', 'KeyM', 'Escape', 'Enter',
+    ];
+    if (handled.includes(event.code)) event.preventDefault();
+
+    if (!this.keys.has(event.code) && (event.code === 'KeyE' || event.code === 'KeyQ')) {
+      this.justPressed.add(event.code);
+    }
     this.keys.add(event.code);
     if (event.repeat) return;
-    const actions: Record<string, GameAction> = {
-      Escape: 'pause', KeyC: 'camera', KeyR: 'reset', KeyH: 'hud', KeyN: 'map', KeyM: 'transmission', Enter: 'interact',
+
+    const actions: Partial<Record<string, GameAction>> = {
+      Escape: 'pause',
+      KeyC: 'camera',
+      KeyR: 'reset',
+      KeyH: 'hud',
+      KeyN: 'map',
+      KeyM: 'transmission',
+      Enter: 'interact',
     };
     const action = actions[event.code];
     if (action) this.actionHandlers.get(action)?.();
@@ -70,6 +94,9 @@ export class InputManager {
     this.keys.delete(event.code);
   };
 
-  private onBlur = (): void => { this.focused = false; this.keys.clear(); this.justPressed.clear(); };
-  private onFocus = (): void => { this.focused = true; };
+  private onBlur = (): void => {
+    this.keys.clear();
+    this.justPressed.clear();
+  };
+
 }

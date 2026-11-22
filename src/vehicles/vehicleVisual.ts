@@ -50,7 +50,7 @@ export function createSportsCarVisual(): { root: THREE.Group; wheels: THREE.Mesh
     for (const z of [-1.28, 1.28]) {
       const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.24, 24), rubber);
       wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(x, -0.25, z);
+      wheel.position.set(x, 0.05, z);
       wheel.castShadow = true;
       root.add(wheel);
       const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.25, 16), rim);
