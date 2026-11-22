@@ -6,6 +6,8 @@ import { TrafficSystem } from './TrafficSystem';
 import { RoadChunkManager } from '../world/RoadChunkManager';
 import { RoadPath } from '../world/RoadPath';
 import { VehicleController } from '../vehicles/VehicleController';
+import { getVehicleDefinition, loadSelectedVehicleId, saveSelectedVehicleId } from '../vehicles/VehicleDefinitions';
+import { GaragePreview } from '../vehicles/GaragePreview';
 import { EngineAudio } from '../audio/EngineAudio';
 import { UIController, type MiniMapRoadGeometry } from '../ui/UIController';
 import { PhysicsDebugOverlay } from '../ui/PhysicsDebugOverlay';
@@ -19,6 +21,7 @@ export class Game {
   private readonly audio = new EngineAudio();
   private readonly cameraRig: CameraRig;
   private readonly ui: UIController;
+  private readonly garagePreview: GaragePreview;
   private readonly debugOverlay: PhysicsDebugOverlay;
   private readonly trafficPlayerPosition = new THREE.Vector3();
   private readonly clock = new THREE.Clock();
@@ -79,7 +82,10 @@ export class Game {
     this.audio.setEffectsVolume(settings.effectsVolume);
     this.cameraRig = new CameraRig(this.camera);
     this.ui = new UIController(uiRoot, settings);
+    this.garagePreview = new GaragePreview(this.ui.getGaragePreviewCanvas());
     this.debugOverlay = new PhysicsDebugOverlay(uiRoot);
+    const initialVehicle = getVehicleDefinition(loadSelectedVehicleId());
+    this.garagePreview.setVehicle(initialVehicle);
 
     this.ui.onStart(() => this.startDriving());
     this.ui.onResume(() => this.resume());
@@ -90,8 +96,13 @@ export class Game {
     this.ui.onGearSelect((selection) => {
       if (!this.hasStartedDriving || this.paused) return;
       this.vehicle.selectGear(selection === 'drive' ? 1 : selection);
+      for (const event of this.vehicle.drainShiftEvents()) this.audio.playShiftEvent(event);
     });
     this.ui.onTransmissionToggle(() => this.toggleTransmission());
+    this.ui.onVehiclePreview((vehicleId) => this.garagePreview.setVehicle(getVehicleDefinition(vehicleId)));
+    this.ui.onVehicleSelect((vehicleId) => this.selectVehicle(vehicleId));
+    this.ui.onTripReset(() => this.vehicle.resetTrip());
+    this.ui.onGarageRotate((enabled) => this.garagePreview.setAutoRotate(enabled));
 
     this.input.on('pause', () => {
       if (!this.hasStartedDriving) return;
@@ -140,6 +151,8 @@ export class Game {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.input.dispose();
     this.audio.dispose();
+    this.garagePreview.dispose();
+    this.vehicle.dispose(this.physics, this.scene);
     this.debugOverlay.dispose();
     this.traffic.dispose();
     this.worldScene.dispose();
@@ -220,6 +233,31 @@ export class Game {
     return true;
   }
 
+  private selectVehicle(vehicleId: string): void {
+    const definition = getVehicleDefinition(vehicleId);
+    if (this.vehicle?.definition.id === definition.id) {
+      saveSelectedVehicleId(definition.id);
+      this.ui.setSelectedVehicle(definition.id);
+      return;
+    }
+    // Vehicle changes are only accepted from the menu or while the simulation is paused.
+    if (this.hasStartedDriving && !this.paused) {
+      this.ui.setSelectedVehicle(this.vehicle.definition.id);
+      return;
+    }
+    const position = this.vehicle.getPosition();
+    const forward = this.vehicle.getForward();
+    this.vehicle.dispose(this.physics, this.scene);
+    this.vehicle = new VehicleController(this.physics, this.scene, definition);
+    this.vehicle.setManualTransmission(this.manualTransmission);
+    this.vehicle.reset(position, false, forward);
+    this.latestTelemetry = this.vehicle.getTelemetry();
+    this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
+    saveSelectedVehicleId(definition.id);
+    this.ui.setSelectedVehicle(definition.id);
+    this.garagePreview.setVehicle(definition);
+  }
+
   private toggleTransmission(): void {
     if (!this.hasStartedDriving || this.paused) return;
     this.manualTransmission = !this.manualTransmission;
@@ -235,7 +273,7 @@ export class Game {
     const spawnPosition = this.getSpawnPosition();
     this.worldScene.update(spawnPosition);
 
-    this.vehicle = new VehicleController(this.physics, this.scene);
+    this.vehicle = new VehicleController(this.physics, this.scene, getVehicleDefinition(loadSelectedVehicleId()));
     this.vehicle.setManualTransmission(this.manualTransmission);
     this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAtLocalZ(spawnPosition.z));
     this.traffic = new TrafficSystem(
@@ -260,6 +298,7 @@ export class Game {
       try {
         if (!this.paused) this.step(frameDt);
         else this.input.drainEdges();
+        this.garagePreview.update(frameDt, this.ui.isGarageVisible());
         this.renderer.render(this.scene, this.camera);
         this.updateFps();
       } catch (error) {
@@ -292,6 +331,7 @@ export class Game {
 
       // Controls and forces are prepared before this fixed solver tick.
       this.vehicle.update(this.fixedTimeStep, tickInput);
+      for (const event of this.vehicle.drainShiftEvents()) this.audio.playShiftEvent(event);
       this.traffic.update(this.fixedTimeStep, this.vehicle.getPosition(this.trafficPlayerPosition));
       this.physics.step();
       this.vehicle.syncVisual();
@@ -317,7 +357,8 @@ export class Game {
         telemetry.rpm,
         currentInput.throttle,
         telemetry.speedMps,
-        this.vehicle.getLastShiftTime(),
+        telemetry.engineLoad,
+        this.vehicle.definition,
       );
       this.ui.updateTelemetry(telemetry, this.fps, this.cameraRig.mode, this.dayPhase);
 
@@ -435,6 +476,9 @@ export class Game {
   };
 
   private onVisibilityChange = (): void => {
-    if (document.hidden && !this.paused) this.pause();
+    if (document.hidden) {
+      this.vehicle?.flushOdometer();
+      if (!this.paused) this.pause();
+    }
   };
 }
