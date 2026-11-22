@@ -1,4 +1,5 @@
 import './styles.css';
+import './ui/InstrumentCluster.css';
 import { Game } from './game/Game';
 import { loadSettings } from './ui/UIController';
 

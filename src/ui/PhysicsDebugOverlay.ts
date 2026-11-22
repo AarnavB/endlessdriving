@@ -49,7 +49,7 @@ export class PhysicsDebugOverlay {
       `VELOCITY  x ${number(data.velocityX)}  y ${number(data.velocityY)}  z ${number(data.velocityZ)} m/s`,
       `FORWARD   ${number(data.forwardSpeed)} m/s`,
       `POSITION  x ${number(data.positionX)}  y ${number(data.positionY)}  z ${number(data.positionZ)} m`,
-      `ENGINE    ${Math.round(data.rpm)} RPM  |  gear ${data.gear}`,
+      `ENGINE    ${Math.round(data.rpm)} RPM  |  gear ${data.gear === 0 ? 'N' : data.gear}`,
       `PHYSICS   dt ${number(data.physicsTimestep)} s  |  steps/frame ${data.physicsStepsThisFrame}`,
       `BODY      sleeping: ${data.sleeping ? 'YES' : 'NO'}`,
       `RENDER    mesh sync error: ${number(data.meshSyncError)} m`,
