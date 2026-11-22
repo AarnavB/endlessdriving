@@ -6,6 +6,7 @@ import { CityWorld } from '../world/CityWorld';
 import { VehicleController } from '../vehicles/VehicleController';
 import { EngineAudio } from '../audio/EngineAudio';
 import { UIController } from '../ui/UIController';
+import { PhysicsDebugOverlay } from '../ui/PhysicsDebugOverlay';
 import type { GameSettings, InputState, VehicleTelemetry } from '../types';
 
 const EMPTY_INPUT: InputState = {
@@ -17,6 +18,10 @@ const EMPTY_INPUT: InputState = {
   shiftDownPressed: false,
 };
 
+// Keep the floor contact consistent with the chassis collider. Tyre grip is
+// modelled in VehicleController; high box-on-floor friction pins the car in place.
+const ROAD_COLLISION_FRICTION = 0.08;
+
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -25,6 +30,7 @@ export class Game {
   private readonly audio = new EngineAudio();
   private readonly cameraRig: CameraRig;
   private readonly ui: UIController;
+  private readonly debugOverlay: PhysicsDebugOverlay;
   private readonly clock = new THREE.Clock();
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
@@ -38,6 +44,7 @@ export class Game {
   private hudVisible = true;
   private manualTransmission = false;
   private mapVisible = true;
+  private debugVisible = false;
   private raf = 0;
   private lastFpsTime = performance.now();
   private frameCount = 0;
@@ -80,6 +87,7 @@ export class Game {
     this.cameraRig = new CameraRig(this.camera);
     this.worldScene = new CityWorld(this.scene);
     this.ui = new UIController(uiRoot, settings);
+    this.debugOverlay = new PhysicsDebugOverlay(uiRoot);
 
     this.ui.onStart(() => this.startDriving());
     this.ui.onResume(() => this.resume());
@@ -115,6 +123,11 @@ export class Game {
       this.vehicle.setManualTransmission(this.manualTransmission);
       this.ui.setTransmissionMode(this.manualTransmission ? 'MANUAL' : 'AUTO', true);
     });
+    this.input.on('debug', () => {
+      if (!this.hasStartedDriving) return;
+      this.debugVisible = !this.debugVisible;
+      this.debugOverlay.setVisible(this.debugVisible);
+    });
 
     window.addEventListener('resize', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
@@ -135,6 +148,7 @@ export class Game {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.input.dispose();
     this.audio.dispose();
+    this.debugOverlay.dispose();
     this.renderer.dispose();
     this.physics.free();
   }
@@ -147,7 +161,7 @@ export class Game {
       RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.24, 0),
     );
     this.physics.createCollider(
-      RAPIER.ColliderDesc.cuboid(280, 0.24, 280).setFriction(1.1),
+      RAPIER.ColliderDesc.cuboid(280, 0.24, 280).setFriction(ROAD_COLLISION_FRICTION),
       floor,
     );
 
@@ -174,7 +188,7 @@ export class Game {
     this.vehicle.setManualTransmission(this.manualTransmission);
     this.vehicle.reset(new THREE.Vector3(0, 0.72, -70));
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
-    this.latestTelemetry = this.vehicle.update(1 / 60, EMPTY_INPUT);
+    this.latestTelemetry = this.vehicle.getTelemetry();
   }
 
   private startLoop(): void {
@@ -219,9 +233,13 @@ export class Game {
         ? currentInput
         : { ...currentInput, shiftUpPressed: false, shiftDownPressed: false };
 
-      this.latestTelemetry = this.vehicle.update(this.fixedTimeStep, tickInput);
+      // Controls and forces are prepared before this fixed solver tick.
+      this.vehicle.update(this.fixedTimeStep, tickInput);
       this.physics.step();
       this.vehicle.syncVisual();
+
+      // Read position and velocity only after Rapier has integrated the body.
+      this.latestTelemetry = this.vehicle.getTelemetry();
       this.physicsAccumulator -= this.fixedTimeStep;
       steps++;
 
@@ -240,6 +258,14 @@ export class Game {
         this.vehicle.getLastShiftTime(),
       );
       this.ui.updateTelemetry(telemetry, this.fps, this.cameraRig.mode, this.dayPhase);
+
+      if (this.debugVisible) {
+        this.debugOverlay.update(
+          this.vehicle.getDebugTelemetry(currentInput, this.fixedTimeStep, steps),
+          this.cameraRig.mode,
+          this.camera.position.distanceTo(position),
+        );
+      }
     }
 
     this.dayPhase = (this.dayPhase + frameDt * 0.00048) % 1;
@@ -260,7 +286,7 @@ export class Game {
     this.paused = false;
     this.physicsAccumulator = 0;
     this.vehicle.reset(new THREE.Vector3(0, 0.72, -70));
-    this.latestTelemetry = this.vehicle.update(1 / 60, EMPTY_INPUT);
+    this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.showGame();
     this.clock.getDelta();
@@ -291,13 +317,13 @@ export class Game {
     const position = this.vehicle.getPosition();
     position.y = 0.72;
     this.vehicle.reset(position);
-    this.latestTelemetry = this.vehicle.update(1 / 60, EMPTY_INPUT);
+    this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
   }
 
   private restartDrive(): void {
     this.vehicle.reset(new THREE.Vector3(0, 0.72, -70));
-    this.latestTelemetry = this.vehicle.update(1 / 60, EMPTY_INPUT);
+    this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.resume();
   }
