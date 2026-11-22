@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from './InputManager';
 import { CameraRig } from './CameraRig';
+import { TrafficSystem } from './TrafficSystem';
 import { CityWorld } from '../world/CityWorld';
 import { VehicleController } from '../vehicles/VehicleController';
 import { EngineAudio } from '../audio/EngineAudio';
@@ -22,6 +23,7 @@ export class Game {
   private readonly cameraRig: CameraRig;
   private readonly ui: UIController;
   private readonly debugOverlay: PhysicsDebugOverlay;
+  private readonly trafficPlayerPosition = new THREE.Vector3();
   private readonly clock = new THREE.Clock();
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
@@ -29,6 +31,7 @@ export class Game {
   private readonly worldScene: CityWorld;
   private physics!: RAPIER.World;
   private vehicle!: VehicleController;
+  private traffic!: TrafficSystem;
   private running = false;
   private paused = true;
   private hasStartedDriving = false;
@@ -140,6 +143,7 @@ export class Game {
     this.input.dispose();
     this.audio.dispose();
     this.debugOverlay.dispose();
+    this.traffic.dispose();
     this.renderer.dispose();
     this.physics.free();
   }
@@ -185,6 +189,7 @@ export class Game {
     this.vehicle = new VehicleController(this.physics, this.scene);
     this.vehicle.setManualTransmission(this.manualTransmission);
     this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
+    this.traffic = new TrafficSystem(this.physics, this.scene, -70);
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.latestTelemetry = this.vehicle.getTelemetry();
   }
@@ -233,8 +238,10 @@ export class Game {
 
       // Controls and forces are prepared before this fixed solver tick.
       this.vehicle.update(this.fixedTimeStep, tickInput);
+      this.traffic.update(this.fixedTimeStep, this.vehicle.getPosition(this.trafficPlayerPosition));
       this.physics.step();
       this.vehicle.syncVisual();
+      this.traffic.syncVisuals();
 
       // Read position and velocity only after Rapier has integrated the body.
       this.latestTelemetry = this.vehicle.getTelemetry();
@@ -283,7 +290,7 @@ export class Game {
     this.hasStartedDriving = true;
     this.paused = false;
     this.physicsAccumulator = 0;
-    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70));
+    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.showGame();
