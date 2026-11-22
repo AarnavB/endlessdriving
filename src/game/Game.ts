@@ -199,6 +199,10 @@ export class Game {
     return position;
   }
 
+  private getRoadHeadingAtLocalZ(localZ: number): THREE.Vector3 {
+    return this.roadPath.sampleAtWorldZ(localZ + this.worldOffset.z).tangent;
+  }
+
   /**
    * Rebase at a 2.5 km local radius. Total distance is accumulated by the
    * vehicle controller, while path/chunk indices continue in global distance.
@@ -233,7 +237,7 @@ export class Game {
 
     this.vehicle = new VehicleController(this.physics, this.scene);
     this.vehicle.setManualTransmission(this.manualTransmission);
-    this.vehicle.reset(spawnPosition, true);
+    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAtLocalZ(spawnPosition.z));
     this.traffic = new TrafficSystem(
       this.physics,
       this.scene,
@@ -344,7 +348,7 @@ export class Game {
     this.paused = false;
     this.physicsAccumulator = 0;
     const spawnPosition = this.getSpawnPosition();
-    this.vehicle.reset(spawnPosition, true);
+    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAtLocalZ(spawnPosition.z));
     this.worldScene.reset(spawnPosition);
     this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
@@ -378,7 +382,7 @@ export class Game {
   private resetVehicle(): void {
     const position = this.vehicle.getPosition();
     position.y = this.worldScene.sampleAtWorldZ(position.z + this.worldOffset.z).position.y + 0.72;
-    this.vehicle.reset(position);
+    this.vehicle.reset(position, false, this.getRoadHeadingAtLocalZ(position.z));
     this.worldScene.reset(position);
     this.traffic.reset(this.roadPath.getDistanceAtWorldZ(position.z + this.worldOffset.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
@@ -387,7 +391,7 @@ export class Game {
 
   private restartDrive(): void {
     const spawnPosition = this.getSpawnPosition();
-    this.vehicle.reset(spawnPosition, true);
+    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAtLocalZ(spawnPosition.z));
     this.worldScene.reset(spawnPosition);
     this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
