@@ -137,7 +137,7 @@ export class VehicleController {
     this.driveThrottle = THREE.MathUtils.damp(
       this.driveThrottle,
       input.throttle,
-      input.throttle > this.driveThrottle ? 3.8 : 8.5,
+      input.throttle > this.driveThrottle ? 7.0 : 10.0,
       safeDt,
     );
     this.smoothedSteer = THREE.MathUtils.damp(
@@ -159,7 +159,7 @@ export class VehicleController {
       const hybridAssist = profile.hybridAssist
         ? profile.hybridAssist - Math.min(profile.hybridAssist - 1, speedRatio * (profile.hybridAssist - 1))
         : 1;
-      const clutchTransfer = 0.2 + 0.8 * THREE.MathUtils.smoothstep(this.speedMps, 0.25, 5.5);
+      const clutchTransfer = 0.32 + 0.68 * THREE.MathUtils.smoothstep(this.speedMps, 0.35, 5.5);
       longitudinalForce = profile.maxDriveForce * this.driveThrottle * torqueFactor
         * gearFactor * speedFade * hybridAssist * clutchTransfer;
     } else if (this.gear !== 0 && input.throttle === 0 && this.speedMps > 1.2) {
