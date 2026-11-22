@@ -181,7 +181,6 @@ export class VehicleController {
     const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
     const maxSpeedMps = profile.maxSpeedKmh / 3.6;
     const gearRatio = this.gear === 0 ? 0 : (profile.gearRatios[this.gear - 1] ?? profile.gearRatios[0]);
-    const firstGearRatio = profile.gearRatios[0];
     const speedRatio = THREE.MathUtils.clamp(this.speedMps / maxSpeedMps, 0, 1);
     // Preserve usable power at high speed; engine output should fall with the
     // torque curve and gearing, not an arbitrary 32% power cliff.
@@ -536,15 +535,6 @@ export class VehicleController {
     const ratio = profile.gearRatios[gear - 1] ?? profile.gearRatios[0];
     const wheelRpm = speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
     return wheelRpm * ratio * profile.finalDrive * profile.transferDrive;
-  }
-
-  private calculateCoupledRpm(gear: number, speedMps: number): number {
-    const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
-    return THREE.MathUtils.clamp(
-      this.calculateRawCoupledRpm(gear, speedMps),
-      idleRpm,
-      this.definition.maxRpm,
-    );
   }
 
   private getTorqueFactor(rpm: number): number {
