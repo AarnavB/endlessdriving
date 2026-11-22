@@ -54,7 +54,7 @@ export class PhysicsDebugOverlay {
       `BODY      sleeping: ${data.sleeping ? 'YES' : 'NO'}`,
       `RENDER    mesh sync error: ${number(data.meshSyncError)} m`,
       `CAMERA    ${cameraMode}  |  distance: ${number(cameraDistance)} m`,
-    ].join('\\n');
+    ].join(String.fromCharCode(10));
   }
 
   dispose(): void {
