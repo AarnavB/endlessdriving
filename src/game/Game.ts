@@ -9,7 +9,7 @@ import { VehicleController } from '../vehicles/VehicleController';
 import { getVehicleDefinition, loadSelectedVehicleId, saveSelectedVehicleId } from '../vehicles/VehicleDefinitions';
 import { GaragePreview } from '../vehicles/GaragePreview';
 import { EngineAudio } from '../audio/EngineAudio';
-import { UIController, type MiniMapRoadGeometry } from '../ui/UIController';
+import { UIController } from '../ui/UIController';
 import { PhysicsDebugOverlay } from '../ui/PhysicsDebugOverlay';
 import type { GameSettings, InputState, VehicleTelemetry } from '../types';
 
@@ -27,7 +27,6 @@ export class Game {
   private readonly clock = new THREE.Clock();
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
-  private minimapUpdateAccumulator = 0;
   private latestTelemetry: VehicleTelemetry | null = null;
   private readonly roadPath = new RoadPath(20261122);
   private readonly worldOffset = new THREE.Vector3();
@@ -40,7 +39,6 @@ export class Game {
   private hasStartedDriving = false;
   private hudVisible = true;
   private manualTransmission = false;
-  private mapVisible = true;
   private debugVisible = false;
   private raf = 0;
   private lastFpsTime = performance.now();
@@ -121,11 +119,6 @@ export class Game {
       this.hudVisible = !this.hudVisible;
       this.ui.setHudVisible(this.hudVisible);
     });
-    this.input.on('map', () => {
-      if (!this.hasStartedDriving) return;
-      this.mapVisible = !this.mapVisible;
-      this.ui.setMapVisible(this.mapVisible);
-    });
     this.input.on('transmission', () => this.toggleTransmission());
     this.input.on('debug', () => {
       if (!this.hasStartedDriving) return;
@@ -159,52 +152,6 @@ export class Game {
     this.worldScene.dispose();
     this.renderer.dispose();
     this.physics.free();
-  }
-
-  private buildMiniMapRoadGeometry(
-    playerPosition: THREE.Vector3,
-    playerForward: THREE.Vector3,
-  ): MiniMapRoadGeometry {
-    const playerDistance = this.roadPath.getDistanceAtWorldZ(
-      playerPosition.z + this.worldOffset.z,
-    );
-    const right = new THREE.Vector3(playerForward.z, 0, -playerForward.x).normalize();
-    const currentRoadTangent = this.roadPath.sample(playerDistance).tangent;
-    const pathDirection = currentRoadTangent.dot(playerForward) >= 0 ? 1 : -1;
-    const geometry: MiniMapRoadGeometry = {
-      surface: [],
-      leftEdge: [],
-      rightEdge: [],
-      leftLaneDivider: [],
-      rightLaneDivider: [],
-      centreLeft: [],
-      centreRight: [],
-    };
-
-    const project = (distance: number, lateralOffset: number): { x: number; y: number } => {
-      const sample = this.roadPath.sample(distance);
-      const point = sample.position
-        .addScaledVector(sample.right, lateralOffset)
-        .sub(this.worldOffset)
-        .sub(playerPosition);
-      return {
-        x: 85 + point.dot(right) * 0.72,
-        y: 100 - point.dot(playerForward) * 0.72,
-      };
-    };
-
-    for (let offset = -18; offset <= 110; offset += 8) {
-      const distance = playerDistance + offset * pathDirection;
-      geometry.surface.push(project(distance, 0));
-      geometry.leftEdge.push(project(distance, -9));
-      geometry.rightEdge.push(project(distance, 9));
-      geometry.leftLaneDivider.push(project(distance, -3.6));
-      geometry.rightLaneDivider.push(project(distance, 3.6));
-      geometry.centreLeft.push(project(distance, -0.22));
-      geometry.centreRight.push(project(distance, 0.22));
-    }
-
-    return geometry;
   }
 
   private getSpawnPosition(): THREE.Vector3 {
@@ -269,6 +216,8 @@ export class Game {
   private initializePhysics(): void {
     this.physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.physics.timestep = this.fixedTimeStep;
+    this.physics.numSolverIterations = 8;
+    this.physics.numInternalPgsIterations = 2;
 
     this.worldScene = new RoadChunkManager(this.scene, this.physics, this.roadPath);
     const spawnPosition = this.getSpawnPosition();
@@ -353,11 +302,6 @@ export class Game {
       const position = this.vehicle.getPosition();
       const forward = this.vehicle.getForward();
       this.cameraRig.update(frameDt, position, forward);
-      this.minimapUpdateAccumulator += frameDt;
-      if (this.mapVisible && this.minimapUpdateAccumulator >= 0.12) {
-        this.minimapUpdateAccumulator = 0;
-        this.ui.updateRoadMap(this.buildMiniMapRoadGeometry(position, forward));
-      }
       this.audio.update(
         telemetry.rpm,
         currentInput.throttle,

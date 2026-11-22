@@ -400,7 +400,7 @@ export class RoadChunkManager {
       roadData.indices,
       RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
     )
-      .setFriction(0.08)
+      .setFriction(1.05)
       .setRestitution(0);
     this.physics.createCollider(roadCollider, rigidBody);
 

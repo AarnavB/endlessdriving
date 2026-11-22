@@ -1,6 +1,6 @@
 import type { InputState } from '../types';
 
-type GameAction = 'pause' | 'camera' | 'reset' | 'hud' | 'map' | 'interact' | 'transmission' | 'debug';
+type GameAction = 'pause' | 'camera' | 'reset' | 'hud' | 'interact' | 'transmission' | 'debug';
 
 /**
  * Keyboard input is captured at document level (capture phase) so focus on a
@@ -67,7 +67,7 @@ export class InputManager {
 
     const handled = [
       'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-      'Space', 'KeyE', 'KeyQ', 'KeyC', 'KeyR', 'KeyH', 'KeyN', 'KeyM', 'Escape', 'Enter', 'F3',
+      'Space', 'KeyE', 'KeyQ', 'KeyC', 'KeyR', 'KeyH', 'KeyM', 'Escape', 'Enter', 'F3',
     ];
     if (handled.includes(event.code)) event.preventDefault();
 
@@ -82,7 +82,6 @@ export class InputManager {
       KeyC: 'camera',
       KeyR: 'reset',
       KeyH: 'hud',
-      KeyN: 'map',
       KeyM: 'transmission',
       Enter: 'interact',
       F3: 'debug',

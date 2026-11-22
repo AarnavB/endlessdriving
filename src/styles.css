@@ -28,12 +28,6 @@ button { cursor: pointer; }
 .top-metrics strong { display: block; font-size: 12px; letter-spacing: 1.2px; margin-top: 6px; font-weight: 700; color: #f3f0e9; }
 .icon-control { width: 38px; height: 38px; border: 1px solid rgba(255,255,255,.2); color: #f5f4ef; background: rgba(15,20,27,.52); font-size: 14px; }
 .icon-control:hover { border-color: #f07a42; color: #ff9968; }
-.mini-map { position: absolute; top: 119px; left: 42px; width: 188px; padding: 12px; background: rgba(10,15,21,.78); border: 1px solid rgba(230,236,239,.15); backdrop-filter: blur(18px); }
-.map-label { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: 1.7px; color: #c1c7ca; margin-bottom: 8px; font-weight: 800; }
-.map-label span { color: #ff8e52; }
-.mini-map svg { display: block; width: 100%; }
-.map-footer { display: flex; justify-content: space-between; color: #7f8b94; font-size: 7px; letter-spacing: 1.2px; margin-top: 7px; }
-.map-footer span:first-child { color: #e98b5d; }
 .hud-right { position: absolute; right: 42px; top: 118px; width: 206px; display: flex; flex-direction: column; gap: 9px; }
 .telemetry-card, .speed-card { border: 1px solid rgba(255,255,255,.15); background: rgba(9,14,20,.78); backdrop-filter: blur(17px); padding: 14px 15px 13px; }
 .telemetry-top, .speed-footer { display: flex; justify-content: space-between; align-items: center; color: #97a3aa; font-size: 8px; font-weight: 800; letter-spacing: 1.7px; }
@@ -129,12 +123,12 @@ kbd { display: inline-grid; place-items: center; min-width: 19px; height: 19px; 
 
 @media (max-width: 900px) {
   .hud-top { padding: 0 18px; height: 72px; }.top-metrics { gap: 16px; margin-right: 14px; }.top-metrics > div:nth-child(2) { display: none; }
-  .mini-map { top: 88px; left: 18px; width: 146px; }.hud-right { right: 18px; top: 88px; width: 168px; }
+  .hud-right { right: 18px; top: 88px; width: 168px; }
   .menu-screen { padding: 25px 22px 22px; }.menu-content { grid-template-columns: 1fr 1fr; gap: 20px; }.car-preview-card { padding: 16px; }.car-silhouette { height: 160px; }
   .hud-bottom { padding: 0 18px; }.control-strip { gap: 8px; }.control-strip > span:nth-child(3) { display: none; }.drive-state { min-width: 160px; }
 }
 @media (max-width: 640px) {
-  .brand-sub, .top-metrics > div:nth-child(3), .mini-map, .control-strip, .fps-indicator { display: none !important; }
+  .brand-sub, .top-metrics > div:nth-child(3), .control-strip, .fps-indicator { display: none !important; }
   .hud-top { height: 62px; }.hud-right { width: 132px; top: 78px; right: 10px; }.speed-number strong { font-size: 38px; }.telemetry-card, .speed-card { padding: 10px; }
   .menu-screen { padding: 20px 18px 15px; }.menu-content { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 18px; margin: 15px auto; }.hero-copy { max-width: none; }.hero-copy h1 { font-size: clamp(48px, 15vw, 66px); }.hero-copy p { margin: 12px 0 16px; font-size: 10px; }.car-preview-card { display: none; }.menu-nav { gap: 16px; flex-wrap: wrap; padding-top: 13px; }.phase-note { display: none; }
   .version-tag { font-size: 6px; }.eyebrow { font-size: 7px; }.hud-bottom { height: 54px; padding: 0 16px; }.drive-state { min-width: 0; }.bottom-left-caption { left: 16px; bottom: 65px; font-size: 6px; }
