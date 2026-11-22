@@ -276,7 +276,7 @@ export class VehicleController {
     const dynamicSteerLimit = Math.atan(
       (steeringWheelbase * maxLateralAcceleration) / (this.speedMps * this.speedMps + 1.5),
     );
-    const maxSteerAngle = Math.min(0.34, Math.max(0.012, dynamicSteerLimit));
+    const maxSteerAngle = Math.min(0.34, dynamicSteerLimit);
     const centreSteerAngle = THREE.MathUtils.clamp(this.smoothedSteer, -1, 1) * maxSteerAngle;
 
     // Ackermann geometry: the front tyres converge on a shared instantaneous
