@@ -82,7 +82,7 @@ export class VehicleController {
 
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(0, 0.72, 0)
-      .setLinearDamping(0.035)
+      .setLinearDamping(0.018)
       .setAngularDamping(0.75)
       .setCanSleep(false)
       .enabledRotations(false, true, false);
@@ -173,28 +173,58 @@ export class VehicleController {
       safeDt,
     );
 
+    // Shift before calculating this tick's wheel torque so the new ratio is
+    // applied immediately rather than one simulation frame late.
+    this.updateTransmission(input, signedSpeed);
+
     const profile = this.definition.physics;
     const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
     const maxSpeedMps = profile.maxSpeedKmh / 3.6;
     const gearRatio = this.gear === 0 ? 0 : (profile.gearRatios[this.gear - 1] ?? profile.gearRatios[0]);
+    const firstGearRatio = profile.gearRatios[0];
     const speedRatio = THREE.MathUtils.clamp(this.speedMps / maxSpeedMps, 0, 1);
-    const speedFade = 1 - Math.pow(speedRatio, 1.5) * 0.32;
+    // Preserve usable power at high speed; engine output should fall with the
+    // torque curve and gearing, not an arbitrary 32% power cliff.
+    const speedFade = 1 - Math.pow(speedRatio, 1.5) * 0.12;
     const hybridAssist = profile.hybridAssist
       ? profile.hybridAssist - Math.min(profile.hybridAssist - 1, speedRatio * (profile.hybridAssist - 1))
       : 1;
-    const torqueRpm = Math.max(this.rpm, idleRpm + this.driveThrottle * 1400);
-    const torqueFactor = this.getTorqueFactor(torqueRpm);
-    const gearFactor = this.gear === 0
-      ? 0
-      : THREE.MathUtils.clamp(gearRatio / profile.gearRatios[0], 0.22, 1);
 
-    // The old model cut launch torque to 32% at standstill. Remove that
-    // artificial clutch-force cap; the transmission RPM now models the launch.
-    let engineForce = this.gear === 0 ? 0
-      : profile.maxDriveForce * this.driveThrottle * torqueFactor * gearFactor * speedFade * hybridAssist;
-    if (this.speedMps > maxSpeedMps && engineForce > 0) {
-      engineForce *= THREE.MathUtils.clamp(1 - (this.speedMps - maxSpeedMps) / 10, 0, 1);
-    }
+    const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
+    const rawCoupledRpm = this.gear === 0
+      ? idleRpm
+      : this.calculateRawCoupledRpm(this.gear, Math.abs(signedSpeed));
+    const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.35, 4.2);
+    const coupledTorqueRpm = THREE.MathUtils.clamp(rawCoupledRpm, idleRpm, this.definition.maxRpm);
+    const torqueRpm = this.gear === 0
+      ? idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.72
+      : THREE.MathUtils.lerp(launchRpm, coupledTorqueRpm, clutchEngagement);
+    const torqueFactor = this.getTorqueFactor(torqueRpm);
+
+    // Convert crankshaft torque to tractive force at the driven tyres:
+    // F = engine torque × gear ratio × final drive × transfer ratio / tyre radius.
+    // maxDriveForce is a tyre/traction ceiling, not a substitute for gear ratios.
+    const drivelineEfficiency = 0.9;
+    const wheelTorqueNm = this.definition.torqueNm
+      * torqueFactor
+      * gearRatio
+      * profile.finalDrive
+      * profile.transferDrive
+      * drivelineEfficiency;
+    const requestedWheelForce = wheelTorqueNm / profile.wheelRadiusM;
+    // Soft electronic rev limiter for manual transmission; automatic mode
+    // normally upshifts before reaching this range.
+    const revLimiter = this.gear === 0
+      ? 1
+      : 1 - THREE.MathUtils.smoothstep(
+        this.definition.maxRpm * 1.005,
+        this.definition.maxRpm * 1.03,
+        rawCoupledRpm,
+      );
+    const engineForce = this.gear === 0
+      ? 0
+      : Math.min(profile.maxDriveForce, requestedWheelForce)
+        * this.driveThrottle * speedFade * hybridAssist * revLimiter;
 
     const drivenWheels = this.definition.drivetrain.toLowerCase().includes('all-wheel')
       ? [0, 1, 2, 3]
@@ -278,8 +308,6 @@ export class VehicleController {
     }
     this.lastAppliedForwardForce = reversingFromRest ? reverseForce : (braking ? 0 : engineForce);
 
-    this.updateTransmission(input, signedSpeed);
-
     if (reversingFromRest && !this.reverseAudioLatched) {
       this.shiftEvents.push({
         previousGear: this.gear,
@@ -295,14 +323,13 @@ export class VehicleController {
       this.reverseAudioLatched = false;
     }
 
-    const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
-    const coupledRpm = this.gear === 0
-      ? idleRpm
-      : this.calculateCoupledRpm(this.gear, Math.abs(signedSpeed));
-    const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.35, 4.2);
     const targetRpm = this.gear === 0
       ? idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.72
-      : THREE.MathUtils.lerp(launchRpm, coupledRpm, clutchEngagement);
+      : THREE.MathUtils.lerp(
+        launchRpm,
+        coupledTorqueRpm,
+        clutchEngagement,
+      );
     this.rpm = THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 9 : 6, safeDt);
 
     return this.getTelemetry();
@@ -504,13 +531,20 @@ export class VehicleController {
     this.shiftEvents.length = 0;
   }
 
-  private calculateCoupledRpm(gear: number, speedMps: number): number {
+  private calculateRawCoupledRpm(gear: number, speedMps: number): number {
     const profile = this.definition.physics;
     const ratio = profile.gearRatios[gear - 1] ?? profile.gearRatios[0];
     const wheelRpm = speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
-    const rpm = wheelRpm * ratio * profile.finalDrive * profile.transferDrive;
+    return wheelRpm * ratio * profile.finalDrive * profile.transferDrive;
+  }
+
+  private calculateCoupledRpm(gear: number, speedMps: number): number {
     const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
-    return THREE.MathUtils.clamp(rpm, idleRpm, this.definition.maxRpm);
+    return THREE.MathUtils.clamp(
+      this.calculateRawCoupledRpm(gear, speedMps),
+      idleRpm,
+      this.definition.maxRpm,
+    );
   }
 
   private getTorqueFactor(rpm: number): number {
@@ -540,7 +574,7 @@ export class VehicleController {
     if (previousGear === nextGear) return;
     const targetRpm = nextGear === 0
       ? this.rpm
-      : this.calculateCoupledRpm(nextGear, Math.abs(signedSpeed));
+      : this.calculateRawCoupledRpm(nextGear, Math.abs(signedSpeed));
     // Reject any downshift that would mechanically overspeed the engine.
     if (nextGear < previousGear && nextGear > 0 && targetRpm > this.definition.maxRpm * 0.985) return;
 
@@ -585,11 +619,20 @@ export class VehicleController {
     }
 
     if (this.gear === 0) return;
-    const projectedRpm = this.calculateCoupledRpm(this.gear, Math.abs(signedSpeed));
-    if (projectedRpm > this.definition.maxRpm * 0.87 && this.gear < gearCount) {
+    // Keep automatic shifts sequential and prevent hunting around a shift point.
+    if (performance.now() - this.lastShiftAt < 240) return;
+    const projectedRpm = this.calculateRawCoupledRpm(this.gear, Math.abs(signedSpeed));
+    const throttle = THREE.MathUtils.clamp(Math.max(input.throttle, this.driveThrottle), 0, 1);
+    const upshiftThreshold = this.definition.maxRpm * THREE.MathUtils.lerp(0.74, 0.91, throttle);
+    const downshiftThreshold = Math.max(
+      1850,
+      this.definition.maxRpm * 0.28,
+    );
+
+    if (projectedRpm >= upshiftThreshold && this.gear < gearCount) {
       this.changeGear(this.gear + 1, signedSpeed, true);
-    } else if (projectedRpm < Math.max(1850, this.definition.maxRpm * 0.23)
-      && this.gear > 1 && Math.abs(signedSpeed) > 2) {
+    } else if (projectedRpm <= downshiftThreshold
+      && this.gear > 1 && Math.abs(signedSpeed) > 3.5) {
       this.changeGear(this.gear - 1, signedSpeed, true);
     }
   }

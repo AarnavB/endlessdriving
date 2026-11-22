@@ -8,6 +8,7 @@ export type VehicleId =
 
 export interface VehiclePhysicsProfile {
   massKg: number;
+  /** Peak tyre-limited tractive force at the driven wheels, in newtons. */
   maxDriveForce: number;
   maxSpeedKmh: number;
   brakeForce: number;
@@ -16,6 +17,7 @@ export interface VehiclePhysicsProfile {
   steeringResponse: number;
   engineBrakeForce: number;
   wheelRadiusM: number;
+  /** Final reduction calibrated so top gear reaches rated top speed near redline. */
   finalDrive: number;
   transferDrive: number;
   /** Additional low-speed motor assist for hybrid powertrains. */
@@ -124,7 +126,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     physics: {
       massKg: 1235, maxDriveForce: 11200, maxSpeedKmh: 324, brakeForce: 18400,
       lateralGrip: 5900, handbrakeGrip: 1480, steeringResponse: 0.94,
-      engineBrakeForce: 720, wheelRadiusM: 0.34, finalDrive: 2.9, transferDrive: 1.33,
+      engineBrakeForce: 720, wheelRadiusM: 0.34, finalDrive: 2.99, transferDrive: 1.33,
       gearRatios: [2.77, 1.71, 1.23, 0.96, 0.77], torqueCurve: f40TorqueCurve,
     },
     audio: {
@@ -160,7 +162,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     physics: {
       massKg: 1585, maxDriveForce: 15100, maxSpeedKmh: 352, brakeForce: 21800,
       lateralGrip: 6900, handbrakeGrip: 1650, steeringResponse: 1.08,
-      engineBrakeForce: 790, wheelRadiusM: 0.34, finalDrive: 3.1, transferDrive: 1,
+      engineBrakeForce: 790, wheelRadiusM: 0.34, finalDrive: 4.88, transferDrive: 1,
       hybridAssist: 1.16,
       gearRatios: [3.10, 2.18, 1.63, 1.29, 1.03, 0.84, 0.69], torqueCurve: laFerrariTorqueCurve,
     },
@@ -197,7 +199,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     physics: {
       massKg: 1520, maxDriveForce: 11900, maxSpeedKmh: 325, brakeForce: 19000,
       lateralGrip: 6400, handbrakeGrip: 1540, steeringResponse: 1.02,
-      engineBrakeForce: 760, wheelRadiusM: 0.34, finalDrive: 3.44, transferDrive: 1,
+      engineBrakeForce: 760, wheelRadiusM: 0.34, finalDrive: 4.72, transferDrive: 1,
       gearRatios: [3.09, 2.05, 1.52, 1.12, 0.88, 0.71], torqueCurve: gallardoTorqueCurve,
     },
     audio: {
@@ -233,7 +235,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     physics: {
       massKg: 1665, maxDriveForce: 13200, maxSpeedKmh: 340, brakeForce: 20500,
       lateralGrip: 6250, handbrakeGrip: 1500, steeringResponse: 0.9,
-      engineBrakeForce: 850, wheelRadiusM: 0.35, finalDrive: 3.44, transferDrive: 1,
+      engineBrakeForce: 850, wheelRadiusM: 0.35, finalDrive: 3.51, transferDrive: 1,
       gearRatios: [3.091, 2.105, 1.565, 1.241, 1.065, 0.939], torqueCurve: murcielagoTorqueCurve,
     },
     audio: {
@@ -269,7 +271,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     physics: {
       massKg: 1575, maxDriveForce: 14100, maxSpeedKmh: 350, brakeForce: 22000,
       lateralGrip: 6750, handbrakeGrip: 1580, steeringResponse: 1.14,
-      engineBrakeForce: 890, wheelRadiusM: 0.35, finalDrive: 3.2, transferDrive: 1,
+      engineBrakeForce: 890, wheelRadiusM: 0.35, finalDrive: 5.17, transferDrive: 1,
       gearRatios: [2.92, 1.97, 1.44, 1.10, 0.90, 0.74, 0.62], torqueCurve: aventadorTorqueCurve,
     },
     audio: {
@@ -305,7 +307,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     physics: {
       massKg: 1309, maxDriveForce: 14600, maxSpeedKmh: 335, brakeForce: 23800,
       lateralGrip: 7900, handbrakeGrip: 1760, steeringResponse: 1.22,
-      engineBrakeForce: 820, wheelRadiusM: 0.34, finalDrive: 3.31, transferDrive: 1,
+      engineBrakeForce: 820, wheelRadiusM: 0.34, finalDrive: 4.71, transferDrive: 1,
       gearRatios: [3.98, 2.61, 1.91, 1.48, 1.16, 0.91, 0.69], torqueCurve: sennaTorqueCurve,
     },
     audio: {
