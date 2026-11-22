@@ -28,12 +28,13 @@ interface RoadGeometryData {
 }
 
 const ROAD_SEGMENTS = 30;
+const ROAD_CROSS_SECTIONS = [-ROAD_HALF_WIDTH, -7.35, -7.05, -0.28, 0.28, 7.05, 7.35, ROAD_HALF_WIDTH];
 const TERRAIN_OFFSETS = [-140, -105, -70, -38, -18, -9, 9, 18, 38, 70, 105, 140];
 const LANE_DASH_SPACING = 12;
 const LANE_DASH_LENGTH = 5.2;
 const RAIL_SEGMENT_LENGTH = 8;
 const RAIL_OFFSET = ROAD_HALF_WIDTH + 0.55;
-const MAX_ACTIVE_CHUNKS_BEHIND = 2;
+const MAX_ACTIVE_CHUNKS_BEHIND = 6;
 const MAX_ACTIVE_CHUNKS_AHEAD = 6;
 
 const ENVIRONMENT_KINDS: EnvironmentKind[] = [
@@ -392,49 +393,61 @@ export class RoadChunkManager {
   }
 
   private buildRoadGeometry(index: number, anchor: THREE.Vector3): RoadGeometryData {
-    const vertexCount = (ROAD_SEGMENTS + 1) * 2;
+    const columns = ROAD_CROSS_SECTIONS.length;
+    const rows = ROAD_SEGMENTS + 1;
+    const vertexCount = rows * columns;
     const positions = new Float32Array(vertexCount * 3);
     const colors = new Float32Array(vertexCount * 3);
     const uvs = new Float32Array(vertexCount * 2);
-    const indices = new Uint32Array(ROAD_SEGMENTS * 6);
+    const indices = new Uint32Array(ROAD_SEGMENTS * (columns - 1) * 6);
     const asphalt = new THREE.Color(0x343a3e);
     const shoulder = new THREE.Color(0x414649);
     const startDistance = index * ROAD_CHUNK_LENGTH;
 
-    for (let station = 0; station <= ROAD_SEGMENTS; station++) {
+    for (let station = 0; station < rows; station++) {
       const distance = startDistance + (station / ROAD_SEGMENTS) * ROAD_CHUNK_LENGTH;
       const sample = this.path.sample(distance);
-      const left = sample.position.clone().addScaledVector(sample.right, -ROAD_HALF_WIDTH);
-      const right = sample.position.clone().addScaledVector(sample.right, ROAD_HALF_WIDTH);
-      left.y += 0.025;
-      right.y += 0.025;
-      left.sub(anchor);
-      right.sub(anchor);
 
-      for (let side = 0; side < 2; side++) {
-        const vertex = station * 2 + side;
-        const point = side === 0 ? left : right;
+      for (let column = 0; column < columns; column++) {
+        const across = ROAD_CROSS_SECTIONS[column];
+        const point = sample.position.clone()
+          .addScaledVector(sample.right, across);
+        point.y += 0.025;
+        point.sub(anchor);
+
+        const vertex = station * columns + column;
         positions[vertex * 3] = point.x;
         positions[vertex * 3 + 1] = point.y;
         positions[vertex * 3 + 2] = point.z;
-        const across = side === 0 ? -ROAD_HALF_WIDTH : ROAD_HALF_WIDTH;
-        const color = Math.abs(across) > 7.2 ? shoulder : asphalt;
-        const variation = 0.94 + (hashSeed(this.path.seed, index * 997 + station * 2 + side) / 0x100000000) * 0.11;
+
+        // Keep the shoulder strips distinct from the four-lane asphalt surface.
+        const color = Math.abs(across) >= 7.35 ? shoulder : asphalt;
+        const variation = 0.94
+          + (hashSeed(this.path.seed, index * 997 + station * columns + column) / 0x100000000) * 0.11;
         colors[vertex * 3] = color.r * variation;
         colors[vertex * 3 + 1] = color.g * variation;
         colors[vertex * 3 + 2] = color.b * variation;
-        uvs[vertex * 2] = side;
-        uvs[vertex * 2 + 1] = distance * 0.07;
+
+        uvs[vertex * 2] = (across + ROAD_HALF_WIDTH) / (ROAD_HALF_WIDTH * 2);
+        // Modulo keeps UV magnitudes bounded while preserving the same asphalt
+        // texture phase across chunk boundaries (1000 m is an integer tile loop).
+        uvs[vertex * 2 + 1] = THREE.MathUtils.euclideanModulo(distance, 1000) * 0.07;
       }
-      if (station < ROAD_SEGMENTS) {
-        const base = station * 2;
-        const offset = station * 6;
-        indices[offset] = base;
-        indices[offset + 1] = base + 2;
-        indices[offset + 2] = base + 1;
-        indices[offset + 3] = base + 1;
-        indices[offset + 4] = base + 2;
-        indices[offset + 5] = base + 3;
+    }
+
+    let cursor = 0;
+    for (let station = 0; station < ROAD_SEGMENTS; station++) {
+      for (let column = 0; column < columns - 1; column++) {
+        const a = station * columns + column;
+        const b = a + 1;
+        const c = a + columns;
+        const d = c + 1;
+        indices[cursor++] = a;
+        indices[cursor++] = c;
+        indices[cursor++] = b;
+        indices[cursor++] = b;
+        indices[cursor++] = c;
+        indices[cursor++] = d;
       }
     }
 
