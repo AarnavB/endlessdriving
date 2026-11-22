@@ -105,8 +105,8 @@ function addCurve(parent: THREE.Group, points: THREE.Vector3[], radius: number, 
 function createCabin(root: THREE.Group, config: VehicleVisualConfig, paint: THREE.Material, glass: THREE.Material, trim: THREE.Material): void {
   const baseHalf = config.cabinWidth * 0.5;
   const roofHalf = config.cabinWidth * (config.style === 'classic-wedge' ? 0.34 : 0.36);
-  const baseY = config.bodyHeight * 0.63;
-  const roofY = baseY + config.cabinHeight * (config.style === 'track-aero' ? 0.78 : 0.9);
+  const baseY = config.bodyHeight * 0.48;
+  const roofY = baseY + config.cabinHeight * (config.style === 'track-aero' ? 0.70 : 0.76);
   const frontBase = config.cabinZ + config.cabinLength * 0.47;
   const rearBase = config.cabinZ - config.cabinLength * 0.48;
   const frontRoof = frontBase - config.cabinLength * (config.style === 'classic-wedge' ? 0.31 : 0.22);
@@ -275,7 +275,7 @@ function addAero(root: THREE.Group, config: VehicleVisualConfig, carbon: THREE.M
 
   if (config.wingWidth > 0) {
     const rearZ = -config.bodyLength * 0.43;
-    const wingY = 0.35 + config.wingHeight;
+    const wingY = 0.18 + config.wingHeight * 0.72;
     for (const side of [-1, 1]) {
       addBeam(root,
         new THREE.Vector3(side * config.wingWidth * 0.31, 0.31, rearZ + 0.05),

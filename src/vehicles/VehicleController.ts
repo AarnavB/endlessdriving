@@ -432,7 +432,6 @@ export class VehicleController {
     this.gear = 1;
     this.speedMps = 0;
     this.smoothedSteer = 0;
-    this.yawVelocity = 0;
     this.lastAppliedForwardForce = 0;
     this.driveThrottle = 0;
     this.lastShiftAt = 0;
@@ -440,7 +439,6 @@ export class VehicleController {
     this.reverseAudioLatched = false;
     this.handbrake = false;
     this.lastInput = { ...NEUTRAL_INPUT };
-    this.force.set(0, 0, 0);
     for (const wheel of this.wheelMeshes) wheel.rotation.set(0, 0, 0);
     for (let i = 0; i < 4; i++) {
       this.wheelController.setWheelEngineForce(i, 0);
