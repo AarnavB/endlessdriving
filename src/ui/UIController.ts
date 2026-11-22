@@ -1,6 +1,7 @@
 import type { GameSettings, SpeedUnit, TransmissionMode, VehicleTelemetry } from '../types';
 import { DEFAULT_SETTINGS, SETTINGS_KEY, STATS_KEY } from '../types';
 import type { CameraMode } from '../game/CameraRig';
+import { MAX_FORWARD_SPEED } from '../vehicles/VehicleController';
 
 const esc = (value: string): string => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char);
 
@@ -90,6 +91,7 @@ export class UIController {
   private onGearSelectCallback: (selection: number | 'drive') => void = () => undefined;
   private onTransmissionToggleCallback: () => void = () => undefined;
   private bestDistanceKm = 0;
+  private lastMilestoneKm = 0;
   private activeScreen: 'menu' | 'game' | 'pause' | 'settings' | 'controls' | 'about' | 'garage' = 'menu';
   private settingsReturnScreen: 'menu' | 'pause' = 'menu';
   private hudVisible = true;
@@ -116,6 +118,12 @@ export class UIController {
   onSettings(callback: (settings: GameSettings) => void): void { this.onSettingsCallback = callback; }
   onGearSelect(callback: (selection: number | 'drive') => void): void { this.onGearSelectCallback = callback; }
   onTransmissionToggle(callback: () => void): void { this.onTransmissionToggleCallback = callback; }
+
+  resetSessionProgress(): void {
+    this.lastMilestoneKm = 0;
+    this.text('#score-value', '0');
+    this.text('#distance-value', '0.00 KM');
+  }
 
   showGame(): void {
     this.closeOverlays();
@@ -172,7 +180,12 @@ export class UIController {
   }
 
   setSettings(settings: GameSettings): void {
+    const speedUnitChanged = settings.speedUnit !== this.settings.speedUnit;
     this.settings = settings;
+    if (speedUnitChanged) {
+      const gauge = this.root.querySelector<HTMLElement>('.speed-gauge');
+      gauge?.replaceWith(this.renderSpeedGauge(settings.speedUnit));
+    }
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* storage may be blocked */ }
     this.root.querySelector<HTMLElement>('#fps-value')?.classList.toggle('hidden', !settings.showFps);
     this.onSettingsCallback(settings);
@@ -181,7 +194,7 @@ export class UIController {
   updateTelemetry(data: VehicleTelemetry, fps: number, mode: CameraMode, dayPhase: number): void {
     const unitValue = this.settings.speedUnit === 'kmh' ? data.speedKmh : data.speedKmh * 0.621371;
     const unit = this.settings.speedUnit === 'kmh' ? 'KM/H' : 'MPH';
-    const speedScaleMaximum = this.settings.speedUnit === 'kmh' ? 220 : 140;
+    const speedScaleMaximum = this.getSpeedScaleMaximum(this.settings.speedUnit);
     const speedRatio = Math.min(1, Math.max(0, unitValue / speedScaleMaximum));
     const rpmRatio = Math.min(1, Math.max(0, data.rpm / 7200));
     const speedNeedle = this.root.querySelector<HTMLElement>('#speed-needle');
@@ -213,6 +226,14 @@ export class UIController {
       } catch { /* storage may be blocked */ }
     }
     this.text('#best-distance-value', `${this.bestDistanceKm.toFixed(2)} KM`);
+    const milestones = [1, 5, 10, 25, 50, 100, 200, 500];
+    for (const milestone of milestones) {
+      if (data.distanceKm >= milestone && this.lastMilestoneKm < milestone) {
+        this.lastMilestoneKm = milestone;
+        this.showMilestoneToast(milestone);
+        break;
+      }
+    }
 
     const mapDot = this.root.querySelector<SVGCircleElement>('#map-player-dot');
     if (mapDot) {
@@ -224,6 +245,33 @@ export class UIController {
     this.text('#fps-value', `${fps} FPS`);
     const time = dayPhase * 24;
     this.text('#time-value', `${String(Math.floor(time)).padStart(2, '0')}:${String(Math.floor((time % 1) * 60)).padStart(2, '0')}`);
+  }
+
+  private getSpeedScaleMaximum(unit: SpeedUnit): number {
+    const conversion = unit === 'kmh' ? 3.6 : 3600 / 1609.344;
+    return Math.ceil((MAX_FORWARD_SPEED * conversion) / 10) * 10;
+  }
+
+  private renderSpeedGauge(unit: SpeedUnit): string {
+    const kmh = unit === 'kmh';
+    const maximum = this.getSpeedScaleMaximum(unit);
+    return createGaugeMarkup(
+      'speed',
+      'SPEED',
+      maximum,
+      kmh ? 5 : 2,
+      kmh ? 4 : 5,
+      Math.round(maximum * 0.9),
+      kmh ? 'KM/H' : 'MPH',
+    );
+  }
+
+  private showMilestoneToast(distanceKm: number): void {
+    const toast = this.root.querySelector<HTMLElement>('#toast');
+    if (!toast) return;
+    toast.textContent = `MILESTONE REACHED  ·  ${distanceKm} KM`;
+    toast.classList.remove('hidden');
+    window.setTimeout(() => toast.classList.add('hidden'), 2600);
   }
 
   private text(selector: string, value: string): void {
@@ -258,7 +306,13 @@ export class UIController {
       <div id="hud" class="pointer-events-none absolute inset-0 z-10 text-white">
         <header class="hud-top pointer-events-auto flex items-center justify-between">
           <div class="brand-lockup"><span class="brand-mark">ED</span><div><div class="brand-name">ENDLESS <span>DRIVING</span></div><div class="brand-sub">MANHATTAN DISTRICT · FREE DRIVE</div></div></div>
-          <div class="top-metrics"><div><span class="metric-kicker">LOCAL TIME</span><strong id="time-value">09:12</strong></div><div><span class="metric-kicker">DISTANCE</span><strong id="distance-value">0.00 KM</strong></div><div><span class="metric-kicker">VEHICLE</span><strong>APEX GT-RS</strong></div></div>
+          <div class="top-metrics">
+            <div><span class="metric-kicker">LOCAL TIME</span><strong id="time-value">09:12</strong></div>
+            <div><span class="metric-kicker">DISTANCE</span><strong id="distance-value">0.00 KM</strong></div>
+            <div><span class="metric-kicker">BEST</span><strong id="best-distance-value">${this.bestDistanceKm.toFixed(2)} KM</strong></div>
+            <div><span class="metric-kicker">SCORE</span><strong id="score-value">0</strong></div>
+            <div><span class="metric-kicker">VEHICLE</span><strong>APEX GT-RS</strong></div>
+          </div>
           <button id="pause-btn" class="icon-control" aria-label="Pause game">Ⅱ</button>
         </header>
         <div id="mini-map" class="mini-map pointer-events-auto">
@@ -275,7 +329,7 @@ export class UIController {
         </div>
         <div class="hud-right instrument-cluster pointer-events-auto" aria-label="Vehicle instrument cluster">
           <div class="gauge-pair">
-            ${createGaugeMarkup('speed', 'SPEED', this.settings.speedUnit === 'kmh' ? 220 : 140, this.settings.speedUnit === 'kmh' ? 5 : 2, this.settings.speedUnit === 'kmh' ? 4 : 5, this.settings.speedUnit === 'kmh' ? 190 : 118, this.settings.speedUnit === 'kmh' ? 'KM/H' : 'MPH')}
+            ${this.renderSpeedGauge(this.settings.speedUnit)}
             ${createGaugeMarkup('rpm', 'RPM', 7200, 200, 6, 6200, 'RPM')}
           </div>
           <div class="instrument-controls">
@@ -285,13 +339,13 @@ export class UIController {
             </div>
             <div id="gear-selector" class="gear-selector" role="group" aria-label="Select transmission gear">
               <button type="button" data-gear-option="N" aria-label="Select neutral" aria-pressed="false">N</button>
-              <button type="button" data-gear-option="D" aria-label="Select automatic drive" aria-pressed="false">D</button>
-              <button type="button" data-gear-option="1" data-forward-gear aria-label="Select first gear" aria-pressed="false">1</button>
-              <button type="button" data-gear-option="2" data-forward-gear aria-label="Select second gear" aria-pressed="false">2</button>
-              <button type="button" data-gear-option="3" data-forward-gear aria-label="Select third gear" aria-pressed="false">3</button>
-              <button type="button" data-gear-option="4" data-forward-gear aria-label="Select fourth gear" aria-pressed="false">4</button>
-              <button type="button" data-gear-option="5" data-forward-gear aria-label="Select fifth gear" aria-pressed="false">5</button>
-              <button type="button" data-gear-option="6" data-forward-gear aria-label="Select sixth gear" aria-pressed="false">6</button>
+              <button type="button" data-gear-option="D" class="${this.settings.transmission === 'manual' ? 'hidden' : ''}" aria-label="Select automatic drive" aria-pressed="false">D</button>
+              <button type="button" data-gear-option="1" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select first gear" aria-pressed="false">1</button>
+              <button type="button" data-gear-option="2" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select second gear" aria-pressed="false">2</button>
+              <button type="button" data-gear-option="3" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select third gear" aria-pressed="false">3</button>
+              <button type="button" data-gear-option="4" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select fourth gear" aria-pressed="false">4</button>
+              <button type="button" data-gear-option="5" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select fifth gear" aria-pressed="false">5</button>
+              <button type="button" data-gear-option="6" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select sixth gear" aria-pressed="false">6</button>
             </div>
             <div class="cluster-footnote"><span>THROTTLE <b id="throttle-value">0%</b></span><span>F3 DIAGNOSTICS</span></div>
           </div>
