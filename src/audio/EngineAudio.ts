@@ -13,7 +13,6 @@ export class EngineAudio {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
   private engineGain: GainNode | null = null;
-  private shiftGain: GainNode | null = null;
 
   private combustionOsc: OscillatorNode | null = null;
   private blockOsc: OscillatorNode | null = null;
@@ -29,7 +28,6 @@ export class EngineAudio {
   private currentProfile: VehicleAudioProfile | null = null;
   private started = false;
   private engineVolume = 0.42;
-  private effectsVolume = 0.45;
   private shiftCutUntil = 0;
 
   async unlock(definition?: VehicleDefinition): Promise<void> {
@@ -137,8 +135,8 @@ export class EngineAudio {
   }
 
   /** The engine channel intentionally contains no separate effects or ambience. */
-  setEffectsVolume(volume: number): void {
-    this.effectsVolume = THREEClamp(volume);
+  setEffectsVolume(_volume: number): void {
+    // Kept for settings compatibility; there are no non-engine sounds in this channel.
   }
 
   dispose(): void {
@@ -153,14 +151,12 @@ export class EngineAudio {
     this.exhaustLowPass?.disconnect();
     this.blockGain?.disconnect();
     this.engineGain?.disconnect();
-    this.shiftGain?.disconnect();
     this.master?.disconnect();
 
     void this.context?.close();
     this.context = null;
     this.master = null;
     this.engineGain = null;
-    this.shiftGain = null;
     this.combustionOsc = null;
     this.blockOsc = null;
     this.combustionWave = null;
@@ -180,7 +176,6 @@ export class EngineAudio {
 
     this.master = ctx.createGain();
     this.engineGain = ctx.createGain();
-    this.shiftGain = ctx.createGain();
     this.blockGain = ctx.createGain();
 
     this.saturation = ctx.createWaveShaper();
@@ -216,10 +211,8 @@ export class EngineAudio {
     this.exhaustResonance.connect(this.exhaustLowPass);
     this.exhaustLowPass.connect(this.engineGain);
     this.engineGain.connect(this.master);
-    this.shiftGain.connect(this.master);
     this.master.gain.value = 0.88;
     this.engineGain.gain.value = this.engineVolume * 0.72;
-    this.shiftGain.gain.value = this.engineVolume * 0.42;
 
     this.combustionOsc.start();
     this.blockOsc.start();
@@ -305,7 +298,7 @@ export class EngineAudio {
   ): void {
     const ctx = this.context;
     const profile = this.currentProfile;
-    if (!ctx || !profile || !this.combustionWave || !this.shiftGain) return;
+    if (!ctx || !profile || !this.combustionWave || !this.saturation) return;
 
     const firingOrder = profile.cylinders / 2;
     const startHz = Math.max(24, (Math.max(700, currentRpm) / 60) * firingOrder);
@@ -313,41 +306,32 @@ export class EngineAudio {
     const now = ctx.currentTime;
 
     const oscillator = ctx.createOscillator();
-    const gain = ctx.createGain();
+    const envelope = ctx.createGain();
     oscillator.setPeriodicWave(this.combustionWave);
     oscillator.frequency.setValueAtTime(startHz, now);
     oscillator.frequency.exponentialRampToValueAtTime(targetHz, now + 0.075);
 
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(
+    envelope.gain.setValueAtTime(0.0001, now);
+    envelope.gain.exponentialRampToValueAtTime(
       Math.max(0.0002, peakGain * this.engineVolume),
       now + 0.018,
     );
-    gain.gain.setValueAtTime(
+    envelope.gain.setValueAtTime(
       Math.max(0.0002, peakGain * this.engineVolume) * 0.72,
       now + Math.min(0.095, duration * 0.45),
     );
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
-    oscillator.connect(this.saturation ?? this.shiftGain);
-    if (this.saturation) {
-      this.saturation.connect(gain);
-    }
-    gain.connect(this.bodyFilter ?? this.shiftGain);
-    if (this.bodyFilter) {
-      // Reuse the same exhaust resonator and low-pass path as the main engine.
-      this.bodyFilter.connect(this.exhaustResonance ?? this.shiftGain);
-      if (this.exhaustResonance) {
-        this.exhaustResonance.connect(this.exhaustLowPass ?? this.shiftGain);
-        if (this.exhaustLowPass) this.exhaustLowPass.connect(this.shiftGain);
-      }
-    }
+    // Feed the transient into the same saturator, exhaust-body resonance and
+    // low-pass chain as the running engine. It cannot introduce a separate tone.
+    oscillator.connect(envelope);
+    envelope.connect(this.saturation);
 
     oscillator.start(now);
     oscillator.stop(now + duration + 0.025);
     oscillator.onended = () => {
       oscillator.disconnect();
-      gain.disconnect();
+      envelope.disconnect();
     };
   }
 }
