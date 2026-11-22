@@ -291,7 +291,6 @@ export class VehicleController {
 
   reset(position = new THREE.Vector3(0, 0.72, -70), resetDistance = false): void {
     this.body.resetForces(true);
-    if (resetDistance) this.distanceKm = 0;
     this.body.resetTorques(true);
     this.body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
