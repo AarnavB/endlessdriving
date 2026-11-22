@@ -48,7 +48,7 @@ export class VehicleController {
   readonly body: RAPIER.RigidBody;
   readonly visual: THREE.Group;
   readonly definition: VehicleDefinition;
-  private readonly wheelMeshes: THREE.Mesh[];
+  private readonly wheelMeshes: THREE.Object3D[];
   private gear = 1;
   private rpm: number;
   private speedMps = 0;
@@ -71,6 +71,7 @@ export class VehicleController {
   private readonly scratchQuat = new THREE.Quaternion();
   private handbrake = false;
   private manualTransmission = false;
+  private driveThrottle = 0;
   private reverseAudioLatched = false;
 
   constructor(world: RAPIER.World, scene: THREE.Scene, definition: VehicleDefinition) {
@@ -133,25 +134,34 @@ export class VehicleController {
     const signedSpeed = this.velocity.dot(this.forward);
 
     this.handbrake = input.handbrake;
+    this.driveThrottle = THREE.MathUtils.damp(
+      this.driveThrottle,
+      input.throttle,
+      input.throttle > this.driveThrottle ? 3.8 : 8.5,
+      safeDt,
+    );
     this.smoothedSteer = THREE.MathUtils.damp(
       this.smoothedSteer, input.steer, this.definition.physics.steeringResponse * 9, safeDt,
     );
 
     let longitudinalForce = 0;
     const profile = this.definition.physics;
+    const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
     const maxSpeedMps = profile.maxSpeedKmh / 3.6;
     const gearRatio = this.gear === 0 ? 0 : (profile.gearRatios[this.gear - 1] ?? profile.gearRatios[0]);
     if (this.gear !== 0 && input.throttle > 0 && input.brake === 0) {
       const targetCoupledRpm = this.calculateCoupledRpm(this.gear, Math.abs(signedSpeed));
-      const torqueFactor = this.getTorqueFactor(targetCoupledRpm);
+      const launchRpm = idleRpm + this.driveThrottle * 1650;
+      const torqueFactor = this.getTorqueFactor(Math.max(targetCoupledRpm, launchRpm));
       const gearFactor = THREE.MathUtils.clamp(gearRatio / profile.gearRatios[0], 0.3, 1);
       const speedRatio = THREE.MathUtils.clamp(this.speedMps / maxSpeedMps, 0, 1);
       const speedFade = 1 - Math.pow(speedRatio, 1.5) * 0.38;
       const hybridAssist = profile.hybridAssist
         ? profile.hybridAssist - Math.min(profile.hybridAssist - 1, speedRatio * (profile.hybridAssist - 1))
         : 1;
-      longitudinalForce = profile.maxDriveForce * input.throttle * torqueFactor
-        * gearFactor * speedFade * hybridAssist;
+      const clutchTransfer = 0.2 + 0.8 * THREE.MathUtils.smoothstep(this.speedMps, 0.25, 5.5);
+      longitudinalForce = profile.maxDriveForce * this.driveThrottle * torqueFactor
+        * gearFactor * speedFade * hybridAssist * clutchTransfer;
     } else if (this.gear !== 0 && input.throttle === 0 && this.speedMps > 1.2) {
       longitudinalForce = -Math.sign(signedSpeed) * profile.engineBrakeForce;
     }
@@ -216,12 +226,11 @@ export class VehicleController {
       this.reverseAudioLatched = false;
     }
 
-    const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
-    const freeRevRpm = idleRpm + input.throttle * (this.definition.maxRpm - idleRpm) * 0.84;
+    const freeRevRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.44;
     const coupledRpm = this.gear === 0
       ? idleRpm
       : this.calculateCoupledRpm(this.gear, Math.abs(signedSpeed));
-    const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.8, 7.5);
+    const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.25, 5.5);
     const targetRpm = this.gear === 0
       ? freeRevRpm
       : THREE.MathUtils.lerp(freeRevRpm, coupledRpm, clutchEngagement);
@@ -383,6 +392,7 @@ export class VehicleController {
     this.smoothedSteer = 0;
     this.yawVelocity = 0;
     this.lastAppliedForwardForce = 0;
+    this.driveThrottle = 0;
     this.lastShiftAt = 0;
     this.shiftEvents.length = 0;
     this.reverseAudioLatched = false;

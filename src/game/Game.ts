@@ -27,6 +27,7 @@ export class Game {
   private readonly clock = new THREE.Clock();
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
+  private minimapUpdateAccumulator = 0;
   private latestTelemetry: VehicleTelemetry | null = null;
   private readonly roadPath = new RoadPath(20261122);
   private readonly worldOffset = new THREE.Vector3();
@@ -53,12 +54,12 @@ export class Game {
     this.manualTransmission = settings.transmission === 'manual';
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: settings.graphics !== 'low',
+      antialias: settings.graphics === 'high',
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, settings.graphics === 'low' ? 1 : 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, settings.graphics === 'low' ? 0.85 : settings.graphics === 'medium' ? 1 : 1.25));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = settings.graphics !== 'low';
+    this.renderer.shadowMap.enabled = settings.graphics === 'high';
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -66,8 +67,8 @@ export class Game {
 
     this.scene.add(this.hemi);
     this.sun.position.set(-55, 105, 38);
-    this.sun.castShadow = settings.graphics !== 'low';
-    const shadowResolution = settings.graphics === 'high' ? 1024 : 512;
+    this.sun.castShadow = settings.graphics === 'high';
+    const shadowResolution = 768;
     this.sun.shadow.mapSize.set(shadowResolution, shadowResolution);
     this.sun.shadow.camera.left = -110;
     this.sun.shadow.camera.right = 110;
@@ -352,7 +353,11 @@ export class Game {
       const position = this.vehicle.getPosition();
       const forward = this.vehicle.getForward();
       this.cameraRig.update(frameDt, position, forward);
-      if (this.mapVisible) this.ui.updateRoadMap(this.buildMiniMapRoadGeometry(position, forward));
+      this.minimapUpdateAccumulator += frameDt;
+      if (this.mapVisible && this.minimapUpdateAccumulator >= 0.12) {
+        this.minimapUpdateAccumulator = 0;
+        this.ui.updateRoadMap(this.buildMiniMapRoadGeometry(position, forward));
+      }
       this.audio.update(
         telemetry.rpm,
         currentInput.throttle,
@@ -398,8 +403,8 @@ export class Game {
     this.ui.showGame();
     this.clock.getDelta();
 
-    // Begin the selected car's recorded engine sample on the user gesture so
-    // browsers do not block playback before the first simulation frame.
+    // Unlock the layered engine-and-exhaust sound on the user gesture so
+    // browsers do not block Web Audio before the first simulation frame.
     void this.audio.unlock(this.vehicle.definition).catch((error: unknown) => {
       console.warn('Recorded engine audio could not be enabled:', error);
     });
@@ -452,11 +457,11 @@ export class Game {
 
     const low = settings.graphics === 'low';
     const high = settings.graphics === 'high';
-    this.renderer.shadowMap.enabled = !low;
-    this.sun.castShadow = !low;
-    const shadowResolution = high ? 1024 : 512;
+    this.renderer.shadowMap.enabled = high;
+    this.sun.castShadow = high;
+    const shadowResolution = 768;
     this.sun.shadow.mapSize.set(shadowResolution, shadowResolution);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, low ? 1 : 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, low ? 0.85 : high ? 1.25 : 1));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   }
 

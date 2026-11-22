@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { VehicleDefinition, VehicleVisualConfig } from './VehicleDefinitions';
 
-type VehicleVisualParts = { root: THREE.Group; wheels: THREE.Mesh[] };
+type VehicleVisualParts = { root: THREE.Group; wheels: THREE.Object3D[] };
 
 function material(color: number, metalness = 0.35, roughness = 0.32): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, metalness, roughness });
@@ -28,11 +28,13 @@ function createHull(config: VehicleVisualConfig, paint: THREE.Material): THREE.M
   const l = config.bodyLength;
   const h = config.bodyHeight;
   const sections = [
-    { z: l * 0.5, width: w * 0.68, upper: w * 0.6, top: h * 0.5 },
-    { z: l * 0.3, width: w, upper: w * 0.98, top: h * 0.93 },
-    { z: -l * 0.06, width: w * 1.02, upper: w * 0.82, top: h },
-    { z: -l * 0.34, width: w * 0.98, upper: w * 0.94, top: h * 0.88 },
-    { z: -l * 0.5, width: w * 0.83, upper: w * 0.68, top: h * 0.46 },
+    { z: l * 0.5, width: w * 0.65, upper: w * 0.56, top: h * 0.46 },
+    { z: l * 0.4, width: w * 0.84, upper: w * 0.77, top: h * 0.72 },
+    { z: l * 0.24, width: w * 0.98, upper: w * 0.96, top: h * 0.92 },
+    { z: l * 0.04, width: w, upper: w * 0.92, top: h },
+    { z: -l * 0.18, width: w * 1.02, upper: w * 0.97, top: h * 0.96 },
+    { z: -l * 0.36, width: w * 0.96, upper: w * 0.9, top: h * 0.82 },
+    { z: -l * 0.5, width: w * 0.8, upper: w * 0.66, top: h * 0.48 },
   ];
   const positions: number[] = [];
   const indices: number[] = [];
@@ -64,6 +66,37 @@ function createHull(config: VehicleVisualConfig, paint: THREE.Material): THREE.M
   return new THREE.Mesh(geometry, paint);
 }
 
+function createCabinGeometry(
+  width: number,
+  height: number,
+  length: number,
+  style: VehicleVisualConfig['style'],
+): THREE.BufferGeometry {
+  const frontRoofZ = style === 'classic-wedge' ? length * 0.13 : length * 0.2;
+  const rearRoofZ = style === 'track-aero' ? -length * 0.38 : -length * 0.3;
+  const roofHeight = height * (style === 'track-aero' ? 0.93 : 1);
+  const baseHalf = width * 0.5;
+  const roofHalf = width * (style === 'sculpted' ? 0.35 : 0.37);
+  const frontTopY = height * (style === 'classic-wedge' ? 0.78 : 0.84);
+  const p = [
+    -baseHalf, 0, length * 0.5, baseHalf, 0, length * 0.5,
+    baseHalf, 0, -length * 0.5, -baseHalf, 0, -length * 0.5,
+    -roofHalf, frontTopY, frontRoofZ, roofHalf, frontTopY, frontRoofZ,
+    roofHalf, roofHeight, rearRoofZ, -roofHalf, roofHeight, rearRoofZ,
+  ];
+  const i = [
+    0,1,5, 0,5,4, 1,2,6, 1,6,5,
+    2,3,7, 2,7,6, 3,0,4, 3,4,7,
+    4,5,6, 4,6,7, 0,3,2, 0,2,1,
+  ];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  geometry.setIndex(i);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 export function createSportsCarVisual(definition: VehicleDefinition): VehicleVisualParts {
   const config = definition.visual;
   const root = new THREE.Group();
@@ -86,25 +119,25 @@ export function createSportsCarVisual(definition: VehicleDefinition): VehicleVis
   addBox(root, [config.bodyWidth * 0.86, 0.12, config.bodyLength * 0.12], [0, 0.08, -config.bodyLength * 0.4], carbon);
 
   const cabin = new THREE.Mesh(
-    new THREE.BoxGeometry(config.cabinWidth, config.cabinHeight, config.cabinLength),
+    createCabinGeometry(config.cabinWidth, config.cabinHeight, config.cabinLength, config.style),
     glass,
   );
-  cabin.position.set(0, 0.36 + config.cabinHeight * 0.38, config.cabinZ);
-  cabin.rotation.x = config.style === 'classic-wedge' ? -0.08 : 0.035;
+  cabin.position.set(0, 0.36, config.cabinZ);
   cabin.castShadow = true;
+  cabin.receiveShadow = true;
   root.add(cabin);
 
   const roof = addBox(
     root,
     [config.cabinWidth * 0.84, 0.12, config.cabinLength * 0.55],
-    [0, cabin.position.y + config.cabinHeight * 0.49, config.cabinZ - config.cabinLength * 0.04],
+    [0, cabin.position.y + config.cabinHeight * 0.94, config.cabinZ - config.cabinLength * 0.04],
     paint,
   );
   roof.scale.y = config.style === 'track-aero' ? 0.72 : 1;
 
   for (const side of [-1, 1]) {
     addBox(root, [0.035, config.cabinHeight * 0.8, config.cabinLength * 0.9],
-      [side * (config.cabinWidth * 0.49), cabin.position.y, config.cabinZ], carbon);
+      [side * (config.cabinWidth * 0.49), cabin.position.y + config.cabinHeight * 0.5, config.cabinZ], carbon);
     addBox(root, [0.08, 0.22, config.bodyLength * 0.38],
       [side * (config.bodyWidth * 0.48), 0.02, -config.bodyLength * 0.08], carbon);
 
@@ -118,6 +151,11 @@ export function createSportsCarVisual(definition: VehicleDefinition): VehicleVis
 
     addBox(root, [0.05, 0.13, config.bodyLength * 0.12],
       [side * (config.bodyWidth * 0.43), 0.12, config.bodyLength * 0.34], carbon);
+    addBox(root, [0.18, 0.09, 0.16],
+      [side * (config.bodyWidth * 0.52), cabin.position.y + config.cabinHeight * 0.58,
+        config.cabinZ + config.cabinLength * 0.31], carbon, side * 0.12);
+    addBox(root, [0.14, 0.032, 0.04],
+      [side * (config.bodyWidth * 0.49), 0.28, -config.bodyLength * 0.04], rim);
   }
 
   const frontBumper = addBox(root,
@@ -137,27 +175,49 @@ export function createSportsCarVisual(definition: VehicleDefinition): VehicleVis
       [side * config.bodyWidth * 0.31, 0.1, -config.bodyLength * 0.49], tail);
   }
 
-  const wheels: THREE.Mesh[] = [];
+  const wheels: THREE.Object3D[] = [];
+  const archMaterial = material(config.paint, 0.64, 0.3);
   for (const side of [-1, 1]) {
     for (const z of [-config.wheelBase * 0.5, config.wheelBase * 0.5]) {
       const x = side * config.wheelTrack * 0.5;
-      const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 20), rubber);
+      const assembly = new THREE.Group();
+      assembly.position.set(x, 0.02, z);
+      const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 28), rubber);
       tire.rotation.z = Math.PI / 2;
-      tire.position.set(x, 0.02, z);
       tire.castShadow = true;
-      root.add(tire);
-      wheels.push(tire);
-      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.265, 16), rim);
+      assembly.add(tire);
+
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.27, 20), rim);
       hub.rotation.z = Math.PI / 2;
-      hub.position.copy(tire.position);
-      root.add(hub);
-      for (let spoke = 0; spoke < 5; spoke++) {
-        const spokeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.025, 0.28), rim);
-        spokeMesh.position.copy(tire.position);
-        spokeMesh.position.x += side * 0.135;
+      hub.position.x = side * 0.13;
+      assembly.add(hub);
+      for (let spoke = 0; spoke < 10; spoke++) {
+        const spokeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.028, 0.27), rim);
+        spokeMesh.position.x = side * 0.142;
         spokeMesh.rotation.x = spoke * Math.PI / 5;
-        root.add(spokeMesh);
+        assembly.add(spokeMesh);
       }
+      const brakeDisc = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.22, 0.035, 24),
+        material(0x555c62, 0.72, 0.48),
+      );
+      brakeDisc.rotation.z = Math.PI / 2;
+      brakeDisc.position.x = -side * 0.075;
+      assembly.add(brakeDisc);
+      const caliper = addBox(assembly, [0.095, 0.2, 0.14],
+        [-side * 0.11, 0.12, 0.16], material(0xb52c24, 0.3, 0.45));
+      caliper.castShadow = false;
+      root.add(assembly);
+      wheels.push(assembly);
+
+      const arch = new THREE.Mesh(
+        new THREE.TorusGeometry(0.39, 0.035, 7, 24, Math.PI),
+        archMaterial,
+      );
+      arch.rotation.y = Math.PI / 2;
+      arch.position.set(x, 0.02, z);
+      arch.castShadow = true;
+      root.add(arch);
     }
   }
 
