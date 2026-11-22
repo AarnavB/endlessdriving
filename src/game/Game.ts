@@ -293,6 +293,7 @@ export class Game {
     this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
+    this.ui.resetSessionProgress();
     this.ui.showGame();
     this.clock.getDelta();
 
@@ -330,6 +331,7 @@ export class Game {
     this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
+    this.ui.resetSessionProgress();
     this.resume();
   }
 
