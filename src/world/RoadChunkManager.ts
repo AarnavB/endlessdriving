@@ -639,7 +639,10 @@ export class RoadChunkManager {
     anchor: THREE.Vector3,
   ): void {
     const start = index * ROAD_CHUNK_LENGTH;
-    const curbs = new THREE.InstancedMesh(this.unitBox, this.cityCurbMaterial, (ROAD_SEGMENTS + 1) * 2);
+    const curbStep = 3;
+    const curbSegmentLength = ROAD_CHUNK_LENGTH * curbStep / ROAD_SEGMENTS;
+    const curbCountPerSide = Math.ceil(ROAD_SEGMENTS / curbStep);
+    const curbs = new THREE.InstancedMesh(this.unitBox, this.cityCurbMaterial, curbCountPerSide * 2);
     curbs.instanceMatrix.setUsage(THREE.StaticDrawUsage);
     let curbIndex = 0;
     for (const side of [-1, 1]) {
@@ -651,7 +654,7 @@ export class RoadChunkManager {
       sidewalk.receiveShadow = true;
       group.add(sidewalk);
 
-      for (let station = 0; station <= ROAD_SEGMENTS; station++) {
+      for (let station = curbStep / 2; station < ROAD_SEGMENTS; station += curbStep) {
         const distance = start + (station / ROAD_SEGMENTS) * ROAD_CHUNK_LENGTH;
         const sample = this.path.sample(distance);
         const yaw = yawFromTangent(sample.tangent);
@@ -660,12 +663,12 @@ export class RoadChunkManager {
           .sub(anchor);
         position.y += 0.13;
         curbs.setMatrixAt(curbIndex++, makeTransform(
-          position, yaw, new THREE.Vector3(0.24, 0.22, ROAD_CHUNK_LENGTH / ROAD_SEGMENTS + 0.2),
+          position, yaw, new THREE.Vector3(0.24, 0.22, curbSegmentLength + 0.2),
         ));
 
         const halfYaw = yaw / 2;
         this.physics.createCollider(
-          RAPIER.ColliderDesc.cuboid(0.12, 0.11, ROAD_CHUNK_LENGTH / ROAD_SEGMENTS / 2 + 0.1)
+          RAPIER.ColliderDesc.cuboid(0.12, 0.11, curbSegmentLength / 2 + 0.1)
             .setTranslation(position.x, position.y, position.z)
             .setRotation({ x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) })
             .setFriction(0.52),
