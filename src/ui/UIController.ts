@@ -1,7 +1,7 @@
 import type { GameSettings, SpeedUnit, TransmissionMode, VehicleTelemetry } from '../types';
 import { DEFAULT_SETTINGS, SETTINGS_KEY, STATS_KEY } from '../types';
 import type { CameraMode } from '../game/CameraRig';
-import { MAX_FORWARD_SPEED } from '../vehicles/VehicleController';
+import { IDLE_RPM, MAX_FORWARD_SPEED, MAX_RPM } from '../vehicles/VehicleController';
 
 const esc = (value: string): string => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char);
 
@@ -19,26 +19,31 @@ const createGaugeMarkup = (
   redlineStart: number,
   unit: string,
 ): string => {
-  const tickCount = Math.round(maxValue / minorStep);
+  const minimumValue = id === 'rpm' ? IDLE_RPM : 0;
+  const valueRange = maxValue - minimumValue;
+  const tickCount = Math.max(1, Math.round(valueRange / minorStep));
   const ticks: string[] = [];
   for (let i = 0; i <= tickCount; i++) {
     const ratio = i / tickCount;
+    const tickValue = minimumValue + ratio * valueRange;
     const angle = 90 + ratio * 270;
     const major = i % majorEvery === 0;
     const [x1, y1] = polarPoint(major ? 94 : 99, angle);
     const [x2, y2] = polarPoint(106, angle);
-    const isRedline = ratio >= redlineStart / maxValue;
+    const isRedline = tickValue >= redlineStart;
     ticks.push(
       `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" class="gauge-tick ${major ? 'major' : 'minor'} ${isRedline ? 'redline' : ''}"/>`,
     );
     if (major) {
       const [lx, ly] = polarPoint(79, angle);
-      const label = Math.round(i * minorStep / (id === 'speed' ? 1 : 1000));
+      const label = id === 'speed'
+        ? Math.round(tickValue)
+        : Math.round(ratio * maxValue / 1000);
       ticks.push(`<text x="${lx.toFixed(2)}" y="${(ly + 3).toFixed(2)}" class="gauge-mark ${isRedline ? 'redline' : ''}" text-anchor="middle">${label}</text>`);
     }
   }
 
-  const startRatio = redlineStart / maxValue;
+  const startRatio = (redlineStart - minimumValue) / valueRange;
   const redlinePoints: string[] = [];
   for (let i = 0; i <= 24; i++) {
     const ratio = startRatio + (1 - startRatio) * (i / 24);
@@ -196,7 +201,7 @@ export class UIController {
     const unit = this.settings.speedUnit === 'kmh' ? 'KM/H' : 'MPH';
     const speedScaleMaximum = this.getSpeedScaleMaximum(this.settings.speedUnit);
     const speedRatio = Math.min(1, Math.max(0, unitValue / speedScaleMaximum));
-    const rpmRatio = Math.min(1, Math.max(0, data.rpm / 7200));
+    const rpmRatio = Math.min(1, Math.max(0, (data.rpm - IDLE_RPM) / (MAX_RPM - IDLE_RPM)));
     const speedNeedle = this.root.querySelector<HTMLElement>('#speed-needle');
     const rpmNeedle = this.root.querySelector<HTMLElement>('#rpm-needle');
     if (speedNeedle) speedNeedle.style.transform = `rotate(${180 + speedRatio * 270}deg)`;
@@ -330,7 +335,7 @@ export class UIController {
         <div class="hud-right instrument-cluster pointer-events-auto" aria-label="Vehicle instrument cluster">
           <div class="gauge-pair">
             ${this.renderSpeedGauge(this.settings.speedUnit)}
-            ${createGaugeMarkup('rpm', 'RPM', 7200, 200, 6, 6200, 'RPM')}
+            ${createGaugeMarkup('rpm', 'RPM', MAX_RPM, 180, 5, 6200, 'RPM')}
           </div>
           <div class="instrument-controls">
             <div class="transmission-mode">
