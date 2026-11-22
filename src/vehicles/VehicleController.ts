@@ -80,6 +80,14 @@ export class VehicleController {
     this.manualTransmission = enabled;
   }
 
+  /** Select neutral (0) or a forward gear (1–6) without altering vehicle velocity. */
+  selectGear(gear: number): void {
+    if (!Number.isInteger(gear) || gear < 0 || gear > GEAR_RATIOS.length) return;
+    if (gear === this.gear) return;
+    this.gear = gear;
+    this.lastShiftAt = performance.now();
+  }
+
   update(dt: number, input: InputState): VehicleTelemetry {
     const safeDt = THREE.MathUtils.clamp(dt, 1 / 240, 1 / 30);
     this.lastInput = { ...input };
@@ -102,16 +110,27 @@ export class VehicleController {
 
     // Propulsion, braking and reverse all act along the chassis' world-space forward axis.
     let longitudinalForce = 0;
-    if (input.throttle > 0 && input.brake === 0) {
+    // Neutral disconnects engine torque from the wheels while leaving all
+    // passive forces and braking active.
+    if (this.gear !== 0 && input.throttle > 0 && input.brake === 0) {
       const speedRatio = THREE.MathUtils.clamp(this.speedMps / MAX_FORWARD_SPEED, 0, 1);
       const torqueCurve = 1.12 - speedRatio * 0.33;
       longitudinalForce = 10400 * input.throttle * torqueCurve;
     }
 
     if (input.brake > 0) {
-      if (signedSpeed > 0.55) longitudinalForce = -18500 * input.brake;
-      else if (signedSpeed < -0.55) longitudinalForce = 18500 * input.brake;
-      else longitudinalForce = -4400 * input.brake;
+      if (this.gear === 0) {
+        // In neutral, S is a brake only: it must never command reverse torque.
+        longitudinalForce = this.speedMps > 0.2
+          ? -Math.sign(signedSpeed) * 18500 * input.brake
+          : 0;
+      } else if (signedSpeed > 0.55) {
+        longitudinalForce = -18500 * input.brake;
+      } else if (signedSpeed < -0.55) {
+        longitudinalForce = 18500 * input.brake;
+      } else {
+        longitudinalForce = -4400 * input.brake;
+      }
     }
 
     if (this.speedMps > MAX_FORWARD_SPEED && longitudinalForce > 0) {
@@ -150,11 +169,14 @@ export class VehicleController {
 
     this.updateTransmission(input, signedSpeed);
 
-    const gearRatio = GEAR_RATIOS[this.gear - 1] ?? GEAR_RATIOS[0];
+    const gearRatio = this.gear === 0 ? 0 : (GEAR_RATIOS[this.gear - 1] ?? GEAR_RATIOS[0]);
     const estimatedRpm = IDLE_RPM + Math.abs(signedSpeed) * gearRatio * 62;
-    const targetRpm = input.throttle > 0 && this.speedMps < 3
-      ? IDLE_RPM + 2500 * input.throttle
-      : THREE.MathUtils.clamp(estimatedRpm + input.throttle * 800, IDLE_RPM, MAX_RPM);
+    const freeRevRpm = IDLE_RPM + input.throttle * (MAX_RPM - IDLE_RPM) * 0.82;
+    const targetRpm = this.gear === 0
+      ? freeRevRpm
+      : input.throttle > 0 && this.speedMps < 3
+        ? IDLE_RPM + 2500 * input.throttle
+        : THREE.MathUtils.clamp(estimatedRpm + input.throttle * 800, IDLE_RPM, MAX_RPM);
     this.rpm = THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 8 : 4.5, safeDt);
 
     this.distanceKm += this.speedMps * safeDt / 1000;
@@ -181,7 +203,7 @@ export class VehicleController {
       speedKmh: this.speedMps * 3.6,
       rpm: this.rpm,
       gear: this.gear,
-      gearLabel: signedSpeed < -0.7 ? 'R' : String(this.gear),
+      gearLabel: this.gear === 0 ? 'N' : signedSpeed < -0.7 ? 'R' : String(this.gear),
       transmissionMode: this.manualTransmission ? 'MANUAL' : 'AUTO',
       throttle: this.lastInput.throttle,
       steer: this.lastInput.steer,
@@ -256,8 +278,9 @@ export class VehicleController {
       .normalize();
   }
 
-  reset(position = new THREE.Vector3(0, 0.72, -70)): void {
+  reset(position = new THREE.Vector3(0, 0.72, -70), resetDistance = false): void {
     this.body.resetForces(true);
+    if (resetDistance) this.distanceKm = 0;
     this.body.resetTorques(true);
     this.body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -284,15 +307,17 @@ export class VehicleController {
   private updateTransmission(input: InputState, signedSpeed: number): void {
     if (this.manualTransmission) {
       if (input.shiftUpPressed && this.gear < 6) {
-        this.gear++;
+        this.gear = this.gear === 0 ? 1 : this.gear + 1;
         this.lastShiftAt = performance.now();
-      }
-      if (input.shiftDownPressed && this.gear > 1) {
-        this.gear--;
+      } else if (input.shiftDownPressed && this.gear > 0) {
+        this.gear = this.gear === 1 ? 0 : this.gear - 1;
         this.lastShiftAt = performance.now();
       }
       return;
     }
+
+    // An explicitly selected neutral state remains latched in automatic mode.
+    if (this.gear === 0) return;
 
     const ratio = GEAR_RATIOS[this.gear - 1] ?? 1;
     const projectedRpm = IDLE_RPM + Math.abs(signedSpeed) * ratio * 62;
