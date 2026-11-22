@@ -246,7 +246,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.091, 2.105, 1.565, 1.241, 1.065, 0.939], torqueCurve: murcielagoTorqueCurve,
     },
     audio: {
-      sampleUrl: 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Lamborghini_Murci%C3%A9lago_with_Fi_Exhaust_-_engine_and_exhaust_sound_%28YouTube_iyWtAgi6R-s%29.opus',
+      sampleUrl: 'https://upload.wikimedia.org/wikipedia/commons/8/8b/Lamborghini_Murci%C3%A9lago_with_Fi_Exhaust_-_engine_and_exhaust_sound_%28YouTube_iyWtAgi6R-s%29.opus',
       sourcePage: 'https://commons.wikimedia.org/wiki/File:Lamborghini_Murci%C3%A9lago_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_iyWtAgi6R-s).opus',
       sourceTitle: 'Lamborghini Murciélago with Fi Exhaust - engine and exhaust sound',
       sourceCreator: 'FiExhaust',
