@@ -134,6 +134,20 @@ export class EngineAudio {
     }
   }
 
+  /** Suspend the engine tone while the game is paused. */
+  pause(): void {
+    if (this.context?.state === 'running') {
+      void this.context.suspend();
+    }
+  }
+
+  /** Resume the engine tone when gameplay resumes. */
+  resume(): void {
+    if (this.started && this.context?.state === 'suspended') {
+      void this.context.resume();
+    }
+  }
+
   /** The engine channel intentionally contains no separate effects or ambience. */
   setEffectsVolume(_volume: number): void {
     // Kept for settings compatibility; there are no non-engine sounds in this channel.
