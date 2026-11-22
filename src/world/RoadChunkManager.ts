@@ -734,7 +734,9 @@ export class RoadChunkManager {
         }
 
         if (rng.chance(profile.rockChance)) {
-          const scale = rng.range(0.7, 2.2);
+          const scale = profile.kind === 'mountain'
+            ? rng.range(1.4, 4.1)
+            : rng.range(0.7, 2.2);
           const rockPosition = new THREE.Vector3(position.x, groundY + 0.45 * scale, position.z).sub(anchor);
           rockMatrices[profile.kind].push(new THREE.Matrix4().compose(
             rockPosition,

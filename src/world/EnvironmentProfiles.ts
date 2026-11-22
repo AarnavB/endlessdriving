@@ -97,7 +97,7 @@ export const ENVIRONMENT_PROFILES: Record<EnvironmentKind, EnvironmentProfile> =
     rockChance: 0.9,
     buildingChance: 0.01,
     streetlightChance: 0.04,
-    terrainRelief: 2.2,
+    terrainRelief: 4.6,
   },
 };
 
