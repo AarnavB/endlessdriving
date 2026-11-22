@@ -138,6 +138,8 @@ export class EngineAudio {
     const ctx = this.context;
     if (!ctx || !this.started || !this.lowOsc || !this.midOsc || !this.highOsc
       || !this.subOsc || !this.electricOsc || !this.engineFilter || !this.engineGain
+      || !this.lowLayerGain || !this.midLayerGain || !this.highLayerGain
+      || !this.subLayerGain || !this.electricLayerGain
       || !this.windGain || !this.windFilter || !this.turboGain || !this.turboFilter) return;
 
     const now = ctx.currentTime;

@@ -475,7 +475,7 @@ export class UIController {
         </div>
         <div class="hud-right instrument-cluster pointer-events-auto" aria-label="Vehicle instrument cluster">
           <div class="gauge-pair">
-            ${this.renderSpeedGauge(this.settings.speedUnit)}
+            ${this.renderSpeedGauge(this.settings.speedUnit, getVehicleDefinition(this.selectedVehicleId))}
             ${createGaugeMarkup('rpm', 'RPM', getVehicleDefinition(this.selectedVehicleId).maxRpm, 250, 4, getVehicleDefinition(this.selectedVehicleId).maxRpm * 0.9, 'RPM')}
           </div>
           <div class="instrument-controls">
