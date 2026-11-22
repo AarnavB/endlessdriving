@@ -36,6 +36,9 @@ export class VehicleController {
   private smoothedSteer = 0;
   private yawVelocity = 0;
   private distanceKm = 0;
+  private lastDistanceX = 0;
+  private lastDistanceZ = 0;
+  private hasDistanceSample = false;
   private lastShiftAt = 0;
   private lastAppliedForwardForce = 0;
   private lastInput: InputState = { ...NEUTRAL_INPUT };
@@ -179,7 +182,6 @@ export class VehicleController {
         : THREE.MathUtils.clamp(estimatedRpm + input.throttle * 800, IDLE_RPM, MAX_RPM);
     this.rpm = THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 8 : 4.5, safeDt);
 
-    this.distanceKm += this.speedMps * safeDt / 1000;
     for (const wheel of this.wheelMeshes) wheel.rotation.x -= signedSpeed * safeDt / 0.34;
     this.syncVisual();
 
@@ -197,6 +199,15 @@ export class VehicleController {
     this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
     this.speedMps = this.velocity.length();
     const signedSpeed = this.velocity.dot(this.forward);
+
+    // Distance is sampled from the real Rapier transform after integration.
+    // The first sample (and every reset) only establishes a baseline.
+    if (this.hasDistanceSample) {
+      this.distanceKm += Math.hypot(p.x - this.lastDistanceX, p.z - this.lastDistanceZ) / 1000;
+    }
+    this.lastDistanceX = p.x;
+    this.lastDistanceZ = p.z;
+    this.hasDistanceSample = true;
 
     return {
       speedMps: this.speedMps,
@@ -286,6 +297,10 @@ export class VehicleController {
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    if (resetDistance) this.distanceKm = 0;
+    this.lastDistanceX = position.x;
+    this.lastDistanceZ = position.z;
+    this.hasDistanceSample = true;
     this.rpm = IDLE_RPM;
     this.gear = 1;
     this.speedMps = 0;
