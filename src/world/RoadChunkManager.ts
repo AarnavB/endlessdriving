@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { getEnvironmentTransition, selectEnvironmentForFeature } from './EnvironmentProfiles';
+import { ENVIRONMENT_PROFILES, getEnvironmentTransition, selectEnvironmentForFeature } from './EnvironmentProfiles';
 import type { EnvironmentKind, EnvironmentProfile } from './EnvironmentProfiles';
 import { RoadPath, RoadSample, ROAD_CHUNK_LENGTH, ROAD_HALF_WIDTH } from './RoadPath';
 import { SeededRandom, hashSeed } from './SeededRandom';
@@ -47,11 +47,14 @@ function yawFromTangent(tangent: THREE.Vector3): number {
   return Math.atan2(tangent.x, tangent.z);
 }
 
-function terrainHeight(sample: RoadSample, offset: number, distance: number): number {
+function terrainHeight(sample: RoadSample, offset: number, distance: number, relief = 1): number {
   const outsideRoad = Math.max(0, Math.abs(offset) - ROAD_HALF_WIDTH);
   const broad = Math.sin(distance * 0.0045 + offset * 0.008) * 0.72;
   const detail = Math.sin(distance * 0.017 - offset * 0.023) * 0.18;
-  return sample.position.y - 0.34 - outsideRoad * 0.008 + (broad + detail) * Math.min(1, outsideRoad / 28);
+  // Blend terrain down from the road edge instead of leaving a visible trench.
+  const reliefBlend = Math.min(1, outsideRoad / 28);
+  return sample.position.y + 0.015 - outsideRoad * 0.008
+    + (broad + detail) * reliefBlend * relief;
 }
 
 function makeTransform(
@@ -126,6 +129,7 @@ export class RoadChunkManager {
   private readonly asphaltTexture: THREE.CanvasTexture;
   private disposed = false;
   private readonly originOffset = new THREE.Vector3();
+  private environmentOverride: EnvironmentKind | null = null;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -144,19 +148,19 @@ export class RoadChunkManager {
     });
 
     this.treeCrownMaterials = this.makeEnvironmentMaterials((kind) => ({
-      color: kind === 'forest' ? 0x28553a : kind === 'mountain' ? 0x526947 : 0x477343,
+      color: ENVIRONMENT_PROFILES[kind].treeColor,
       roughness: 1,
     }));
     this.bushMaterials = this.makeEnvironmentMaterials((kind) => ({
-      color: kind === 'forest' ? 0x315b3b : kind === 'mountain' ? 0x5f6e50 : 0x5c7846,
+      color: ENVIRONMENT_PROFILES[kind].bushColor,
       roughness: 1,
     }));
     this.rockMaterials = this.makeEnvironmentMaterials((kind) => ({
-      color: kind === 'mountain' ? 0x89877f : kind === 'forest' ? 0x686f69 : 0x817d72,
+      color: ENVIRONMENT_PROFILES[kind].rockColor,
       roughness: 0.94,
     }));
     this.buildingMaterials = this.makeEnvironmentMaterials((kind) => ({
-      color: kind === 'industrial' ? 0x68757b : kind === 'suburban' ? 0x958c7d : 0x777970,
+      color: ENVIRONMENT_PROFILES[kind].buildingColor,
       roughness: 0.84,
       metalness: kind === 'industrial' ? 0.16 : 0.04,
     }));
@@ -185,6 +189,25 @@ export class RoadChunkManager {
 
   reset(playerPosition: THREE.Vector3): void {
     this.update(playerPosition);
+  }
+
+  /**
+   * Force one environment profile, or return to deterministic regional
+   * selection with 'auto'. Active chunks are rebuilt from the same seed/index.
+   */
+  setEnvironmentProfile(profile: EnvironmentKind | 'auto'): void {
+    const nextProfile = profile === 'auto' ? null : profile;
+    if (nextProfile === this.environmentOverride) return;
+    this.environmentOverride = nextProfile;
+
+    const activeIndices = [...this.chunks.keys()].sort((a, b) => a - b);
+    for (const index of activeIndices) {
+      const chunk = this.chunks.get(index);
+      if (chunk) this.removeChunk(chunk);
+    }
+    for (const index of activeIndices) {
+      this.chunks.set(index, this.createChunk(index));
+    }
   }
 
   /** Sample the global road path and return the current rebased local position. */
@@ -321,10 +344,12 @@ export class RoadChunkManager {
     const anchor = this.path.sample(index * ROAD_CHUNK_LENGTH).position;
     group.position.copy(anchor).sub(this.originOffset);
     const ownedGeometries: THREE.BufferGeometry[] = [];
-    const transition = getEnvironmentTransition(this.path.seed, index);
-    const terrainColor = new THREE.Color(transition.primary.terrainColor)
-      .lerp(new THREE.Color(transition.secondary.terrainColor), transition.blend);
-
+    const forcedProfile = this.environmentOverride
+      ? ENVIRONMENT_PROFILES[this.environmentOverride]
+      : null;
+    const transition = forcedProfile
+      ? { primary: forcedProfile, secondary: forcedProfile, blend: 0 }
+      : getEnvironmentTransition(this.path.seed, index);
     const roadData = this.buildRoadGeometry(index, anchor);
     ownedGeometries.push(roadData.geometry);
     const road = new THREE.Mesh(roadData.geometry, this.roadMaterial);
@@ -332,7 +357,7 @@ export class RoadChunkManager {
     road.frustumCulled = true;
     group.add(road);
 
-    const terrainGeometry = this.buildTerrainGeometry(index, terrainColor, anchor);
+    const terrainGeometry = this.buildTerrainGeometry(index, transition, anchor);
     ownedGeometries.push(terrainGeometry);
     const terrain = new THREE.Mesh(terrainGeometry, this.terrainMaterial);
     terrain.receiveShadow = true;
@@ -422,12 +447,19 @@ export class RoadChunkManager {
     return { geometry, positions, indices };
   }
 
-  private buildTerrainGeometry(index: number, baseColor: THREE.Color, anchor: THREE.Vector3): THREE.BufferGeometry {
+  private buildTerrainGeometry(index: number, transition: { primary: EnvironmentProfile; secondary: EnvironmentProfile; blend: number }, anchor: THREE.Vector3): THREE.BufferGeometry {
     const columns = TERRAIN_OFFSETS.length;
     const rows = ROAD_SEGMENTS + 1;
     const positions = new Float32Array(columns * rows * 3);
     const colors = new Float32Array(columns * rows * 3);
     const indices = new Uint32Array((columns - 1) * (rows - 1) * 6);
+    const terrainColor = new THREE.Color(transition.primary.terrainColor)
+      .lerp(new THREE.Color(transition.secondary.terrainColor), transition.blend);
+    const terrainRelief = THREE.MathUtils.lerp(
+      transition.primary.terrainRelief,
+      transition.secondary.terrainRelief,
+      transition.blend,
+    );
     const startDistance = index * ROAD_CHUNK_LENGTH;
 
     for (let row = 0; row < rows; row++) {
@@ -436,16 +468,16 @@ export class RoadChunkManager {
       for (let column = 0; column < columns; column++) {
         const offset = TERRAIN_OFFSETS[column];
         const point = sample.position.clone().addScaledVector(sample.right, offset);
-        point.y = terrainHeight(sample, offset, distance);
+        point.y = terrainHeight(sample, offset, distance, terrainRelief);
         point.sub(anchor);
         const vertex = row * columns + column;
         positions[vertex * 3] = point.x;
         positions[vertex * 3 + 1] = point.y;
         positions[vertex * 3 + 2] = point.z;
         const variation = 0.94 + (hashSeed(this.path.seed, index * 331 + row * 19 + column) / 0x100000000) * 0.12;
-        colors[vertex * 3] = baseColor.r * variation;
-        colors[vertex * 3 + 1] = baseColor.g * variation;
-        colors[vertex * 3 + 2] = baseColor.b * variation;
+        colors[vertex * 3] = terrainColor.r * variation;
+        colors[vertex * 3 + 1] = terrainColor.g * variation;
+        colors[vertex * 3 + 2] = terrainColor.b * variation;
       }
     }
 
@@ -656,8 +688,8 @@ export class RoadChunkManager {
         const sample = this.path.sample(distance);
         const offset = rng.range(14, 58);
         const position = sample.position.clone().addScaledVector(sample.right, side * offset);
-        const groundY = terrainHeight(sample, side * offset, distance);
         const profile = selectEnvironmentForFeature(transition, rng);
+        const groundY = terrainHeight(sample, side * offset, distance, profile.terrainRelief);
         const yaw = yawFromTangent(sample.tangent) + rng.range(-0.75, 0.75);
 
         if (rng.chance(profile.treeChance)) {
@@ -719,7 +751,9 @@ export class RoadChunkManager {
         for (const along of [28, 88]) {
           const distance = start + along + rng.range(-5, 5);
           const sample = this.path.sample(distance);
-          const position = sample.position.clone().addScaledVector(sample.right, side * (ROAD_HALF_WIDTH + 3.5));
+          const sideOffset = side * (ROAD_HALF_WIDTH + 3.5);
+          const position = sample.position.clone().addScaledVector(sample.right, sideOffset);
+          position.y = terrainHeight(sample, sideOffset, distance, transitionProfile.terrainRelief);
           const polePosition = new THREE.Vector3(position.x, position.y + 3.2, position.z).sub(anchor);
           const lampPosition = new THREE.Vector3(
             position.x - side * 0.52,
@@ -756,7 +790,10 @@ export class RoadChunkManager {
       const distance = start + rng.range(35, ROAD_CHUNK_LENGTH - 25);
       const sample = this.path.sample(distance);
       const side = rng.chance(0.5) ? -1 : 1;
-      const position = sample.position.clone().addScaledVector(sample.right, side * (ROAD_HALF_WIDTH + 4.1));
+      const sideOffset = side * (ROAD_HALF_WIDTH + 4.1);
+      const position = sample.position.clone().addScaledVector(sample.right, sideOffset);
+      const signProfile = selectEnvironmentForFeature(transition, rng);
+      position.y = terrainHeight(sample, sideOffset, distance, signProfile.terrainRelief);
       const yaw = yawFromTangent(sample.tangent);
       signPostMatrices.push(makeTransform(
         new THREE.Vector3(position.x, position.y + 2.0, position.z).sub(anchor),
