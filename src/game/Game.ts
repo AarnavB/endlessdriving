@@ -86,6 +86,11 @@ export class Game {
     this.ui.onReset(() => this.resetVehicle());
     this.ui.onSettings((next) => this.applySettings(next));
     this.ui.onRestart(() => this.restartDrive());
+    this.ui.onGearSelect((selection) => {
+      if (!this.hasStartedDriving || this.paused) return;
+      this.vehicle.selectGear(selection === 'drive' ? 1 : selection);
+    });
+    this.ui.onTransmissionToggle(() => this.toggleTransmission());
 
     this.input.on('pause', () => {
       if (!this.hasStartedDriving) return;
@@ -108,12 +113,7 @@ export class Game {
       this.mapVisible = !this.mapVisible;
       this.ui.setMapVisible(this.mapVisible);
     });
-    this.input.on('transmission', () => {
-      if (!this.hasStartedDriving || this.paused) return;
-      this.manualTransmission = !this.manualTransmission;
-      this.vehicle.setManualTransmission(this.manualTransmission);
-      this.ui.setTransmissionMode(this.manualTransmission ? 'MANUAL' : 'AUTO', true);
-    });
+    this.input.on('transmission', () => this.toggleTransmission());
     this.input.on('debug', () => {
       if (!this.hasStartedDriving) return;
       this.debugVisible = !this.debugVisible;
@@ -142,6 +142,13 @@ export class Game {
     this.debugOverlay.dispose();
     this.renderer.dispose();
     this.physics.free();
+  }
+
+  private toggleTransmission(): void {
+    if (!this.hasStartedDriving || this.paused) return;
+    this.manualTransmission = !this.manualTransmission;
+    this.vehicle.setManualTransmission(this.manualTransmission);
+    this.ui.setTransmissionMode(this.manualTransmission ? 'MANUAL' : 'AUTO', true);
   }
 
   private initializePhysics(): void {
@@ -177,7 +184,7 @@ export class Game {
 
     this.vehicle = new VehicleController(this.physics, this.scene);
     this.vehicle.setManualTransmission(this.manualTransmission);
-    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70));
+    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.latestTelemetry = this.vehicle.getTelemetry();
   }
@@ -313,7 +320,7 @@ export class Game {
   }
 
   private restartDrive(): void {
-    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70));
+    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.resume();
