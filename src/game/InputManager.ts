@@ -1,6 +1,6 @@
 import type { InputState } from '../types';
 
-type GameAction = 'pause' | 'camera' | 'reset' | 'hud' | 'map' | 'interact' | 'transmission';
+type GameAction = 'pause' | 'camera' | 'reset' | 'hud' | 'map' | 'interact' | 'transmission' | 'debug';
 
 /**
  * Keyboard input is captured at document level (capture phase) so focus on a
@@ -67,7 +67,7 @@ export class InputManager {
 
     const handled = [
       'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-      'Space', 'KeyE', 'KeyQ', 'KeyC', 'KeyR', 'KeyH', 'KeyN', 'KeyM', 'Escape', 'Enter',
+      'Space', 'KeyE', 'KeyQ', 'KeyC', 'KeyR', 'KeyH', 'KeyN', 'KeyM', 'Escape', 'Enter', 'F3',
     ];
     if (handled.includes(event.code)) event.preventDefault();
 
@@ -85,6 +85,7 @@ export class InputManager {
       KeyN: 'map',
       KeyM: 'transmission',
       Enter: 'interact',
+      F3: 'debug',
     };
     const action = actions[event.code];
     if (action) this.actionHandlers.get(action)?.();
@@ -98,5 +99,4 @@ export class InputManager {
     this.keys.clear();
     this.justPressed.clear();
   };
-
 }
