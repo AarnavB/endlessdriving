@@ -261,7 +261,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     massKg: 1575,
     drivetrain: 'All-wheel drive',
     physics: {
-      massKg: 1775, maxDriveForce: 14100, maxSpeedKmh: 350, brakeForce: 22000,
+      massKg: 1575, maxDriveForce: 14100, maxSpeedKmh: 350, brakeForce: 22000,
       lateralGrip: 6750, handbrakeGrip: 1580, steeringResponse: 1.14,
       engineBrakeForce: 890, wheelRadiusM: 0.35, finalDrive: 3.2, transferDrive: 1,
       gearRatios: [2.92, 1.97, 1.44, 1.10, 0.90, 0.74, 0.62], torqueCurve: aventadorTorqueCurve,
