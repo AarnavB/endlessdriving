@@ -9,15 +9,6 @@ import { UIController } from '../ui/UIController';
 import { PhysicsDebugOverlay } from '../ui/PhysicsDebugOverlay';
 import type { GameSettings, InputState, VehicleTelemetry } from '../types';
 
-const EMPTY_INPUT: InputState = {
-  throttle: 0,
-  brake: 0,
-  steer: 0,
-  handbrake: false,
-  shiftUpPressed: false,
-  shiftDownPressed: false,
-};
-
 // Keep the floor contact consistent with the chassis collider. Tyre grip is
 // modelled in VehicleController; high box-on-floor friction pins the car in place.
 const ROAD_COLLISION_FRICTION = 0.08;
