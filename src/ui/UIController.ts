@@ -212,7 +212,7 @@ export class UIController {
     this.text('#menu-vehicle-index', String(VEHICLE_CATALOGUE.findIndex((vehicle) => vehicle.id === definition.id) + 1).padStart(2, '0'));
     this.text('#menu-vehicle-name', definition.name);
     this.text('#menu-vehicle-variant', definition.variant);
-    this.text('#menu-vehicle-engine', `V${definition.audio.cylinders} · ${definition.displacementL.toFixed(1)}L · ${definition.audio.induction === 'twin-turbo' ? 'TWIN TURBO' : definition.audio.induction === 'hybrid' ? 'HYBRID' : 'NA'}`);
+    this.text('#menu-vehicle-engine', `${definition.engine.toUpperCase()} · ${definition.displacementL.toFixed(1)}L`);
     this.text('#menu-vehicle-drive', definition.drivetrain.toUpperCase());
     this.text('#vehicle-hud-name', definition.name.toUpperCase());
     this.text('#menu-vehicle-transmission', definition.transmission.toUpperCase());
