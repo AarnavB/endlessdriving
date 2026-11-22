@@ -25,18 +25,18 @@ export interface VehiclePhysicsProfile {
 }
 
 export interface VehicleAudioProfile {
-  /** Directly streamed, openly attributed real-world vehicle recording. */
-  sampleUrl: string;
-  sourcePage: string;
-  sourceTitle: string;
-  sourceCreator: string;
-  recordedVehicle: string;
-  /** Explicitly explains when a closely related model is used as a proxy. */
-  sourceNote?: string;
-  license: 'CC BY 3.0';
-  volume: number;
-  minPlaybackRate: number;
-  maxPlaybackRate: number;
+  cylinders: 8 | 10 | 12;
+  induction: 'naturally-aspirated' | 'twin-turbo' | 'hybrid';
+  /** Combustion pulse width within one firing interval. */
+  pulseWidth: number;
+  /** Dominant low exhaust resonance, in Hz. */
+  exhaustResonanceHz: number;
+  /** Mechanical/exhaust body level for low-frequency weight. */
+  exhaustBodyGain: number;
+  /** Soft saturation drive for a gruff, compressed exhaust edge. */
+  saturation: number;
+  /** Low-pass ceiling that preserves body and suppresses piercing harmonics. */
+  maxExhaustHz: number;
 }
 
 export interface VehicleVisualConfig {
@@ -128,13 +128,9 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [2.77, 1.71, 1.23, 0.96, 0.77], torqueCurve: f40TorqueCurve,
     },
     audio: {
-      sampleUrl: 'https://upload.wikimedia.org/wikipedia/commons/5/56/Ferrari_F40_-_engine_and_exhaust_sound_%28YouTube_yfF5gtwxBzY%29.opus',
-      sourcePage: 'https://commons.wikimedia.org/wiki/File:Ferrari_F40_-_engine_and_exhaust_sound_(YouTube_yfF5gtwxBzY).opus',
-      sourceTitle: 'Ferrari F40 - engine and exhaust sound',
-      sourceCreator: 'Car Trends',
-      recordedVehicle: 'Ferrari F40',
-      license: 'CC BY 3.0',
-      volume: 0.92, minPlaybackRate: 0.78, maxPlaybackRate: 1.34,
+      cylinders: 8, induction: 'twin-turbo', pulseWidth: 0.15,
+      exhaustResonanceHz: 112, exhaustBodyGain: 0.98,
+      saturation: 2.35, maxExhaustHz: 820,
     },
     visual: {
       paint: 0xb91f27, bodyWidth: 1.9, bodyLength: 4.42, bodyHeight: 0.56,
@@ -169,13 +165,9 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.10, 2.18, 1.63, 1.29, 1.03, 0.84, 0.69], torqueCurve: laFerrariTorqueCurve,
     },
     audio: {
-      sampleUrl: 'https://upload.wikimedia.org/wikipedia/commons/9/96/Ferrari_LaFerrari_-_engine_and_exhaust_sound_%28YouTube_miX50gTQndk%29.opus',
-      sourcePage: 'https://commons.wikimedia.org/wiki/File:Ferrari_LaFerrari_-_engine_and_exhaust_sound_(YouTube_miX50gTQndk).opus',
-      sourceTitle: 'Ferrari LaFerrari - engine and exhaust sound',
-      sourceCreator: 'Erwin Lindsen',
-      recordedVehicle: 'Ferrari LaFerrari',
-      license: 'CC BY 3.0',
-      volume: 0.9, minPlaybackRate: 0.76, maxPlaybackRate: 1.36,
+      cylinders: 12, induction: 'hybrid', pulseWidth: 0.10,
+      exhaustResonanceHz: 156, exhaustBodyGain: 0.78,
+      saturation: 1.5, maxExhaustHz: 1180,
     },
     visual: {
       paint: 0xc92c23, bodyWidth: 1.98, bodyLength: 4.7, bodyHeight: 0.5,
@@ -209,13 +201,9 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.09, 2.05, 1.52, 1.12, 0.88, 0.71], torqueCurve: gallardoTorqueCurve,
     },
     audio: {
-      sampleUrl: 'https://upload.wikimedia.org/wikipedia/commons/2/23/Lamborghini_Gallardo_LP560-4_with_Fi_Exhaust_-_engine_and_exhaust_sound_%28YouTube_C-oenmi1FZE%29.opus',
-      sourcePage: 'https://commons.wikimedia.org/wiki/File:Lamborghini_Gallardo_LP560-4_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_C-oenmi1FZE).opus',
-      sourceTitle: 'Lamborghini Gallardo LP560-4 with Fi Exhaust - engine and exhaust sound',
-      sourceCreator: 'FiExhaust',
-      recordedVehicle: 'Lamborghini Gallardo LP560-4',
-      license: 'CC BY 3.0',
-      volume: 0.92, minPlaybackRate: 0.78, maxPlaybackRate: 1.34,
+      cylinders: 10, induction: 'naturally-aspirated', pulseWidth: 0.105,
+      exhaustResonanceHz: 148, exhaustBodyGain: 0.87,
+      saturation: 1.75, maxExhaustHz: 1080,
     },
     visual: {
       paint: 0xd6a91f, bodyWidth: 1.9, bodyLength: 4.3, bodyHeight: 0.58,
@@ -249,13 +237,9 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.091, 2.105, 1.565, 1.241, 1.065, 0.939], torqueCurve: murcielagoTorqueCurve,
     },
     audio: {
-      sampleUrl: 'https://upload.wikimedia.org/wikipedia/commons/8/8b/Lamborghini_Murci%C3%A9lago_with_Fi_Exhaust_-_engine_and_exhaust_sound_%28YouTube_iyWtAgi6R-s%29.opus',
-      sourcePage: 'https://commons.wikimedia.org/wiki/File:Lamborghini_Murci%C3%A9lago_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_iyWtAgi6R-s).opus',
-      sourceTitle: 'Lamborghini Murciélago with Fi Exhaust - engine and exhaust sound',
-      sourceCreator: 'FiExhaust',
-      recordedVehicle: 'Lamborghini Murciélago',
-      license: 'CC BY 3.0',
-      volume: 0.94, minPlaybackRate: 0.76, maxPlaybackRate: 1.32,
+      cylinders: 12, induction: 'naturally-aspirated', pulseWidth: 0.16,
+      exhaustResonanceHz: 105, exhaustBodyGain: 1.08,
+      saturation: 2.4, maxExhaustHz: 780,
     },
     visual: {
       paint: 0xb84d24, bodyWidth: 2.02, bodyLength: 4.62, bodyHeight: 0.62,
@@ -289,13 +273,9 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [2.92, 1.97, 1.44, 1.10, 0.90, 0.74, 0.62], torqueCurve: aventadorTorqueCurve,
     },
     audio: {
-      sampleUrl: 'https://upload.wikimedia.org/wikipedia/commons/9/9b/Lamborghini_Aventador_-_engine_and_exhaust_sound_%28YouTube_oMKxhIcSmZs%29.opus',
-      sourcePage: 'https://commons.wikimedia.org/wiki/File:Lamborghini_Aventador_-_engine_and_exhaust_sound_(YouTube_oMKxhIcSmZs).opus',
-      sourceTitle: 'Lamborghini Aventador - engine and exhaust sound',
-      sourceCreator: 'Super Cars for you',
-      recordedVehicle: 'Lamborghini Aventador',
-      license: 'CC BY 3.0',
-      volume: 0.93, minPlaybackRate: 0.77, maxPlaybackRate: 1.35,
+      cylinders: 12, induction: 'naturally-aspirated', pulseWidth: 0.095,
+      exhaustResonanceHz: 160, exhaustBodyGain: 0.84,
+      saturation: 1.85, maxExhaustHz: 1220,
     },
     visual: {
       paint: 0xe36c24, bodyWidth: 2.03, bodyLength: 4.78, bodyHeight: 0.54,
@@ -329,14 +309,9 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.98, 2.61, 1.91, 1.48, 1.16, 0.91, 0.69], torqueCurve: sennaTorqueCurve,
     },
     audio: {
-      sampleUrl: 'https://upload.wikimedia.org/wikipedia/commons/3/37/McLaren_720S_with_Fi_Exhaust_-_engine_and_exhaust_sound_%28YouTube_ijLY6Tl8ex0%29.opus',
-      sourcePage: 'https://commons.wikimedia.org/wiki/File:McLaren_720S_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_ijLY6Tl8ex0).opus',
-      sourceTitle: 'McLaren 720S with Fi Exhaust - engine and exhaust sound',
-      sourceCreator: 'FiExhaust',
-      recordedVehicle: 'McLaren 720S',
-      sourceNote: 'Proxy recording only: this is a 720S recording, not an exact McLaren Senna recording.',
-      license: 'CC BY 3.0',
-      volume: 0.91, minPlaybackRate: 0.78, maxPlaybackRate: 1.35,
+      cylinders: 8, induction: 'twin-turbo', pulseWidth: 0.125,
+      exhaustResonanceHz: 132, exhaustBodyGain: 0.99,
+      saturation: 2.1, maxExhaustHz: 1080,
     },
     visual: {
       paint: 0x254e43, bodyWidth: 1.96, bodyLength: 4.74, bodyHeight: 0.51,
