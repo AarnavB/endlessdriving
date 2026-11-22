@@ -398,10 +398,10 @@ export class Game {
     this.ui.showGame();
     this.clock.getDelta();
 
-    // Start immediately on the click gesture; do not block the render/physics loop on
-    // AudioContext.resume(), which can resolve asynchronously on some browsers.
-    void this.audio.unlock().catch((error: unknown) => {
-      console.warn('Audio could not be enabled:', error);
+    // Begin the selected car's recorded engine sample on the user gesture so
+    // browsers do not block playback before the first simulation frame.
+    void this.audio.unlock(this.vehicle.definition).catch((error: unknown) => {
+      console.warn('Recorded engine audio could not be enabled:', error);
     });
   }
 
@@ -409,6 +409,7 @@ export class Game {
     if (this.paused || !this.hasStartedDriving) return;
     this.paused = true;
     this.physicsAccumulator = 0;
+    this.audio.pause();
     this.ui.showPause();
   }
 
@@ -416,6 +417,7 @@ export class Game {
     if (!this.paused || !this.hasStartedDriving) return;
     this.paused = false;
     this.physicsAccumulator = 0;
+    this.audio.resume();
     this.ui.showGame();
     this.clock.getDelta();
   }
