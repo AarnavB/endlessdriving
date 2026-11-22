@@ -461,3 +461,106 @@
     letter-spacing: 0;
   }
 }
+
+
+/* Bottom-right, gameplay-only analogue instrument cluster. */
+.hud-right.instrument-cluster {
+  top: auto !important;
+  right: clamp(12px, 2.1vw, 34px) !important;
+  bottom: clamp(54px, 7vh, 78px) !important;
+  left: auto !important;
+  width: auto !important;
+  align-items: flex-end;
+  transform: none !important;
+  gap: 5px;
+}
+.gauge-pair { gap: clamp(6px, .85vw, 13px); }
+.analogue-gauge { width: clamp(126px, 14.2vw, 184px); }
+.gauge-readout {
+  top: 46%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  gap: 3px;
+}
+.gauge-readout strong { font-size: clamp(16px, 1.65vw, 22px); }
+.gauge-limit { top: 37%; font-size: 6px; }
+.gauge-gear {
+  top: 63%;
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #ffa071;
+  font-size: 15px;
+  text-shadow: 0 1px 8px rgba(0,0,0,.9);
+}
+.gauge-gear.is-neutral,
+.gauge-gear.is-reverse { border: 0; background: transparent; }
+.rpm-gauge.is-redline .gauge-readout { border: 0; box-shadow: none; }
+.instrument-controls {
+  width: 100%;
+  padding: 5px 4px 3px;
+  border: 0;
+  border-radius: 0;
+  background: rgba(6, 11, 16, .36);
+  box-shadow: none;
+  backdrop-filter: blur(8px);
+}
+.odometer-readouts {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-around;
+  gap: 10px;
+  color: #89969f;
+  font-size: 6px;
+  font-weight: 850;
+  letter-spacing: 1.2px;
+  font-variant-numeric: tabular-nums;
+}
+.odometer-readouts b {
+  margin-left: 4px;
+  color: #ecece6;
+  font: 700 8px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .4px;
+}
+#reset-trip-btn {
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: #ee9467;
+  font-size: 14px;
+  line-height: 1;
+}
+#reset-trip-btn:hover,
+#reset-trip-btn:focus-visible { color: #ffd0b5; outline: none; }
+@media (max-width: 900px) {
+  .hud-right.instrument-cluster {
+    right: 14px !important;
+    bottom: 62px !important;
+  }
+  .analogue-gauge { width: clamp(116px, 16vw, 148px); }
+  .instrument-controls { width: 100%; }
+}
+@media (max-width: 640px) {
+  .hud-right.instrument-cluster {
+    top: auto !important;
+    right: 8px !important;
+    bottom: 48px !important;
+    left: auto !important;
+    width: min(100vw - 16px, 300px) !important;
+    align-items: flex-end;
+    transform: none !important;
+  }
+  .gauge-pair { justify-content: flex-end; gap: 2px; }
+  .analogue-gauge { width: min(43vw, 132px); }
+  .gauge-readout strong { font-size: 15px; }
+  .instrument-controls { width: 100%; }
+  .odometer-readouts { gap: 5px; font-size: 5px; }
+  .odometer-readouts b { font-size: 7px; }
+}

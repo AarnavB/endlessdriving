@@ -30,6 +30,12 @@ export interface VehicleTelemetry {
   throttle: number;
   steer: number;
   distanceKm: number;
+  tripDistanceKm: number;
+  odometerKm: number;
+  vehicleId: string;
+  vehicleName: string;
+  maxRpm: number;
+  maxSpeedKmh: number;
   engineLoad: number;
   worldX: number;
   worldZ: number;
