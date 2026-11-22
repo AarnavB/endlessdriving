@@ -154,7 +154,7 @@ export class VehicleController {
     this.scratchQuat.set(q.x, q.y, q.z, q.w);
     this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
 
-    let bodyVelocity = this.body.linvel();
+    const bodyVelocity = this.body.linvel();
     this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
     this.speedMps = this.velocity.length();
     let signedSpeed = this.velocity.dot(this.forward);
@@ -196,30 +196,10 @@ export class VehicleController {
     }
     const reverseMode = reverseRequested && this.reverseEngaged;
 
-    // Keep the forward redline limit gear-specific, while permitting a
-    // controlled reverse speed instead of snapping backward motion to 0.75 m/s.
-    const gearSpeedLimit = Math.min(
-      this.definition.physics.maxSpeedKmh / 3.6,
-      this.calculateGearSpeedLimitMps(this.gear),
-    );
-    const reverseSpeedLimit = 6; // 21.6 km/h; reverse is capped independently of forward gearing.
-    if (this.gear > 0 && (signedSpeed > gearSpeedLimit || signedSpeed < -reverseSpeedLimit)) {
-      const clampedSignedSpeed = THREE.MathUtils.clamp(
-        signedSpeed,
-        -reverseSpeedLimit,
-        gearSpeedLimit,
-      );
-      this.velocity.addScaledVector(this.forward, clampedSignedSpeed - signedSpeed);
-      this.body.setLinvel({
-        x: this.velocity.x,
-        y: bodyVelocity.y,
-        z: this.velocity.z,
-      }, true);
-      bodyVelocity = this.body.linvel();
-      this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
-      this.speedMps = this.velocity.length();
-      signedSpeed = this.velocity.dot(this.forward);
-    }
+    // Do not hard-clamp chassis velocity to a per-gear redline.
+    // Gear limits belong in the engine torque/rev-limiter model; directly
+    // rewriting velocity here creates an artificial speed wall and can
+    // destabilise the tyre solver during shifts or while cornering.
 
     const profile = this.definition.physics;
     const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
@@ -277,6 +257,7 @@ export class VehicleController {
     // Divide the vehicle-level target force across driven wheels accordingly.
     const drivePerWheel = engineForce * 2 / drivenWheels.length;
     const braking = input.brake > 0 && !reverseMode;
+    const reverseSpeedLimit = 6; // 21.6 km/h; independent of forward gear ratios.
     const reverseForce = reverseMode && signedSpeed > -reverseSpeedLimit
       ? -profile.maxDriveForce * 0.22 * input.brake * torqueFactor
       : 0;
@@ -285,10 +266,17 @@ export class VehicleController {
     const reversePerWheel = reverseForce * 2 / drivenWheels.length;
     const wheelDriveForce = braking ? 0 : reverseMode ? reversePerWheel : drivePerWheel;
 
-    // Progressive steering lock: limit tyre angle as road speed rises.
-    // These are road-wheel angles, not steering-wheel rotations.
-    const speedSteerBlend = THREE.MathUtils.smoothstep(this.speedMps, 2.5, 42);
-    const maxSteerAngle = THREE.MathUtils.lerp(0.34, 0.055, speedSteerBlend);
+    // Limit lateral acceleration through the road-wheel angle, rather than
+    // leaving near-parking steering lock available at motorway speeds.
+    // a_lat = v^2 * tan(delta) / wheelbase; cap commanded cornering demand
+    // to a conservative fraction of gravity so a digital steering input
+    // cannot abruptly rotate the chassis at speed.
+    const steeringWheelbase = this.definition.visual.wheelBase;
+    const maxLateralAcceleration = 0.72 * 9.81;
+    const dynamicSteerLimit = Math.atan(
+      (steeringWheelbase * maxLateralAcceleration) / (this.speedMps * this.speedMps + 1.5),
+    );
+    const maxSteerAngle = Math.min(0.34, Math.max(0.012, dynamicSteerLimit));
     const centreSteerAngle = THREE.MathUtils.clamp(this.smoothedSteer, -1, 1) * maxSteerAngle;
 
     // Ackermann geometry: the front tyres converge on a shared instantaneous
@@ -594,17 +582,6 @@ export class VehicleController {
     const ratio = profile.gearRatios[gear - 1] ?? profile.gearRatios[0];
     const wheelRpm = speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
     return wheelRpm * ratio * profile.finalDrive * profile.transferDrive;
-  }
-
-  /** Road speed at engine redline for the requested forward gear, in m/s. */
-  private calculateGearSpeedLimitMps(gear: number): number {
-    if (gear <= 0) return Number.POSITIVE_INFINITY;
-    const profile = this.definition.physics;
-    const ratio = profile.gearRatios[gear - 1];
-    if (!Number.isFinite(ratio) || ratio <= 0) return 0;
-    const totalReduction = ratio * profile.finalDrive * profile.transferDrive;
-    const wheelRevolutionsPerSecond = this.definition.maxRpm / 60 / totalReduction;
-    return wheelRevolutionsPerSecond * 2 * Math.PI * profile.wheelRadiusM;
   }
 
   private getTorqueFactor(rpm: number): number {
