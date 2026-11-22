@@ -2,23 +2,29 @@ import type { VehicleDefinition } from '../vehicles/VehicleDefinitions';
 import type { VehicleShiftEvent } from '../vehicles/VehicleController';
 
 /**
- * Sample-based engine playback.
+ * Recorded engine playback with a strict engine-focused filter chain.
  *
- * This deliberately contains no oscillator, periodic-wave, or synthesized
- * exhaust path. The audible engine is the recorded car audio assigned to the
- * selected vehicle. Playback rate follows simulated RPM; downshifts create a
- * brief rate flare from the same recording.
+ * No wind bed, ambience, crowd layer, oscillator, synthesized exhaust, or
+ * additional sound effects are mixed into the engine channel. The original
+ * video-derived recordings are band-limited to suppress wind rumble and
+ * intelligible voice frequencies as much as a real-time browser filter allows.
  */
 export class EngineAudio {
+  private context: AudioContext | null = null;
   private sample: HTMLAudioElement | null = null;
+  private mediaSource: MediaElementAudioSourceNode | null = null;
+  private highPass: BiquadFilterNode | null = null;
+  private voiceLowCut: BiquadFilterNode | null = null;
+  private voicePresenceCut: BiquadFilterNode | null = null;
+  private lowPass: BiquadFilterNode | null = null;
+  private outputGain: GainNode | null = null;
+
   private currentVehicleId: VehicleDefinition['id'] | null = null;
   private currentProfile: VehicleDefinition['audio'] | null = null;
   private started = false;
   private paused = false;
 
   private engineVolume = 0.42;
-  private effectsVolume = 0.45;
-
   private shiftStartedAt = 0;
   private shiftDuration = 0;
   private shiftRateBoost = 0;
@@ -26,7 +32,9 @@ export class EngineAudio {
   async unlock(definition: VehicleDefinition): Promise<void> {
     this.started = true;
     this.paused = false;
+    this.ensureAudioGraph();
     await this.selectVehicleSample(definition, true);
+    await this.context?.resume();
   }
 
   update(
@@ -36,7 +44,7 @@ export class EngineAudio {
     engineLoad: number,
     definition: VehicleDefinition,
   ): void {
-    if (!this.started || this.paused) return;
+    if (!this.started || this.paused || !this.context) return;
 
     if (this.currentVehicleId !== definition.id || !this.sample) {
       void this.selectVehicleSample(definition, false).catch((error: unknown) => {
@@ -53,8 +61,7 @@ export class EngineAudio {
     const baseRate = profile.minPlaybackRate
       + (profile.maxPlaybackRate - profile.minPlaybackRate) * rpmCurve;
 
-    // A short pitch rise is applied to the actual recording on downshifts,
-    // including zero-throttle downshifts. No oscillator or synthetic blip is used.
+    // Downshift flare is applied to the real engine recording, even off throttle.
     const now = performance.now();
     const elapsed = (now - this.shiftStartedAt) / 1000;
     const shiftEnvelope = this.shiftDuration > 0
@@ -65,17 +72,24 @@ export class EngineAudio {
       this.shiftDuration = 0;
     }
 
-    const playbackRate = Math.min(
+    this.sample.playbackRate = Math.min(
       1.65,
       Math.max(0.55, baseRate * (1 + this.shiftRateBoost * shiftEnvelope)),
     );
-    this.sample.playbackRate = playbackRate;
-    this.sample.volume = this.getSampleVolume(
-      Math.max(0.06, Math.min(1, engineLoad * 0.72 + throttle * 0.28)),
-    );
+
+    const load = Math.max(0.08, Math.min(1, engineLoad * 0.72 + throttle * 0.28));
+    if (this.outputGain) {
+      const profileGain = this.currentProfile?.volume ?? 0.9;
+      const loadGain = 0.68 + load * 0.32;
+      this.outputGain.gain.setTargetAtTime(
+        Math.min(1, this.engineVolume * profileGain * loadGain),
+        this.context.currentTime,
+        0.045,
+      );
+    }
   }
 
-  /** Gear changes shape the recorded sample itself rather than adding a synth. */
+  /** Gear changes accent the recorded sample only; no separate blip/effect is mixed. */
   playShiftEvent(event: VehicleShiftEvent): void {
     if (!this.started || this.paused || !this.sample) return;
 
@@ -101,25 +115,30 @@ export class EngineAudio {
 
   setEngineVolume(volume: number): void {
     this.engineVolume = Math.max(0, Math.min(1, volume));
-    if (this.sample) {
-      this.sample.volume = this.getSampleVolume(0.7);
+    if (this.outputGain && this.context) {
+      this.outputGain.gain.setTargetAtTime(
+        this.engineVolume * (this.currentProfile?.volume ?? 0.9),
+        this.context.currentTime,
+        0.04,
+      );
     }
   }
 
-  /** Effects volume scales the brief gear-change playback-rate accent. */
-  setEffectsVolume(volume: number): void {
-    this.effectsVolume = Math.max(0, Math.min(1, volume));
-    this.shiftRateBoost *= 0.75 + this.effectsVolume * 0.25;
+  /** Other effects are intentionally disabled: the mix is engine audio only. */
+  setEffectsVolume(_volume: number): void {
+    // No wind, ambience, tyre, crowd, or other effects are mixed by EngineAudio.
   }
 
   pause(): void {
     this.paused = true;
     this.sample?.pause();
+    void this.context?.suspend();
   }
 
   resume(): void {
     if (!this.started || !this.sample) return;
     this.paused = false;
+    void this.context?.resume();
     void this.sample.play().catch((error: unknown) => {
       console.warn('Recorded engine sample could not resume:', error);
     });
@@ -133,11 +152,67 @@ export class EngineAudio {
       this.sample.removeAttribute('src');
       this.sample.load();
     }
+
+    this.mediaSource?.disconnect();
+    this.highPass?.disconnect();
+    this.voiceLowCut?.disconnect();
+    this.voicePresenceCut?.disconnect();
+    this.lowPass?.disconnect();
+    this.outputGain?.disconnect();
+
+    void this.context?.close();
+    this.context = null;
     this.sample = null;
+    this.mediaSource = null;
+    this.highPass = null;
+    this.voiceLowCut = null;
+    this.voicePresenceCut = null;
+    this.lowPass = null;
+    this.outputGain = null;
     this.currentVehicleId = null;
     this.currentProfile = null;
     this.shiftDuration = 0;
     this.shiftRateBoost = 0;
+  }
+
+  private ensureAudioGraph(): void {
+    if (this.context) return;
+
+    this.context = new AudioContext();
+    const context = this.context;
+
+    this.highPass = context.createBiquadFilter();
+    this.highPass.type = 'highpass';
+    this.highPass.frequency.value = 78;
+    this.highPass.Q.value = 0.707;
+
+    // Speech fundamental/body region: attenuate, rather than boost, this band.
+    this.voiceLowCut = context.createBiquadFilter();
+    this.voiceLowCut.type = 'peaking';
+    this.voiceLowCut.frequency.value = 245;
+    this.voiceLowCut.Q.value = 0.9;
+    this.voiceLowCut.gain.value = -10;
+
+    // Reduce voice intelligibility and incidental high-frequency activity.
+    this.voicePresenceCut = context.createBiquadFilter();
+    this.voicePresenceCut.type = 'peaking';
+    this.voicePresenceCut.frequency.value = 1180;
+    this.voicePresenceCut.Q.value = 0.85;
+    this.voicePresenceCut.gain.value = -18;
+
+    this.lowPass = context.createBiquadFilter();
+    this.lowPass.type = 'lowpass';
+    this.lowPass.frequency.value = 920;
+    this.lowPass.Q.value = 0.58;
+
+    this.outputGain = context.createGain();
+    this.outputGain.gain.value = 0;
+
+    this.highPass.connect(this.voiceLowCut);
+    this.voiceLowCut.connect(this.voicePresenceCut);
+    this.voicePresenceCut.connect(this.lowPass);
+    this.lowPass.connect(this.outputGain);
+    this.outputGain.connect(context.destination);
   }
 
   private async selectVehicleSample(
@@ -150,19 +225,26 @@ export class EngineAudio {
     }
 
     this.sample?.pause();
+    this.mediaSource?.disconnect();
+
     if (this.sample) {
       this.sample.removeAttribute('src');
       this.sample.load();
     }
 
+    this.ensureAudioGraph();
     const profile = definition.audio;
-    const sample = new Audio(profile.sampleUrl);
+    const sample = new Audio();
+    sample.crossOrigin = 'anonymous';
     sample.preload = 'auto';
     sample.loop = true;
-    sample.volume = this.getSampleVolume(0.7);
     sample.playbackRate = profile.minPlaybackRate;
-    // Preserve the recording's spectral character while allowing pitch to follow RPM.
     sample.preservesPitch = false;
+    sample.src = profile.sampleUrl;
+    sample.volume = 1;
+
+    this.mediaSource = this.context!.createMediaElementSource(sample);
+    this.mediaSource.connect(this.highPass!);
 
     sample.addEventListener('error', () => {
       console.warn(
@@ -175,15 +257,17 @@ export class EngineAudio {
     this.sample = sample;
     this.currentVehicleId = definition.id;
     this.currentProfile = profile;
+    if (this.outputGain && this.context) {
+      this.outputGain.gain.setTargetAtTime(
+        this.engineVolume * profile.volume * 0.72,
+        this.context.currentTime,
+        0.04,
+      );
+    }
 
-    if (playImmediately) {
+    // A vehicle changed in the garage while paused must begin playing on resume.
+    if (playImmediately || (!this.paused && this.started)) {
       await sample.play();
     }
-  }
-
-  private getSampleVolume(load: number): number {
-    const profileGain = this.currentProfile?.volume ?? 0.9;
-    const loadGain = 0.66 + load * 0.34;
-    return Math.min(1, Math.max(0, this.engineVolume * profileGain * loadGain));
   }
 }
