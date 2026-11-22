@@ -36,6 +36,26 @@ export interface VehicleTelemetry {
   grounded: boolean;
 }
 
+export interface VehicleDebugTelemetry {
+  throttle: number;
+  brake: number;
+  steer: number;
+  appliedForwardForce: number;
+  velocityX: number;
+  velocityY: number;
+  velocityZ: number;
+  forwardSpeed: number;
+  positionX: number;
+  positionY: number;
+  positionZ: number;
+  rpm: number;
+  gear: number;
+  physicsTimestep: number;
+  physicsStepsThisFrame: number;
+  sleeping: boolean;
+  meshSyncError: number;
+}
+
 export const DEFAULT_SETTINGS: GameSettings = {
   engineVolume: 0.42,
   effectsVolume: 0.45,
