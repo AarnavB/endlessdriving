@@ -23,6 +23,8 @@ export interface RoadWorldDiagnostics {
 
 interface RoadGeometryData {
   geometry: THREE.BufferGeometry;
+  positions: Float32Array;
+  indices: Uint32Array;
 }
 
 const ROAD_SEGMENTS = 30;
@@ -371,7 +373,15 @@ export class RoadChunkManager {
         group.position.z,
       ),
     );
-    this.addRoadSurfaceColliders(rigidBody, index, anchor);
+    // Fix Rapier ghost contacts along adjacent triangles on the continuous road surface.
+    const roadCollider = RAPIER.ColliderDesc.trimesh(
+      roadData.positions,
+      roadData.indices,
+      RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
+    )
+      .setFriction(0.08)
+      .setRestitution(0);
+    this.physics.createCollider(roadCollider, rigidBody);
 
     this.addRoadMarkings(group, index, ownedGeometries, anchor);
     this.addGuardrails(group, index, rigidBody, anchor);
@@ -453,40 +463,7 @@ export class RoadChunkManager {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
-    return { geometry };
-  }
-
-  /**
-   * Use overlapping, path-aligned box colliders for the drivable surface.
-   * The rendered road remains a continuous mesh, while the physics surface
-   * avoids long-trimesh internal-edge contacts against the box-shaped chassis.
-   */
-  private addRoadSurfaceColliders(
-    rigidBody: RAPIER.RigidBody,
-    index: number,
-    anchor: THREE.Vector3,
-  ): void {
-    const start = index * ROAD_CHUNK_LENGTH;
-    const segmentLength = ROAD_CHUNK_LENGTH / ROAD_SEGMENTS;
-    const halfLength = segmentLength * 0.5 + 0.12;
-
-    for (let segment = 0; segment < ROAD_SEGMENTS; segment++) {
-      const distance = start + (segment + 0.5) * segmentLength;
-      const sample = this.path.sample(distance);
-      const local = sample.position.clone().sub(anchor);
-      const halfYaw = yawFromTangent(sample.tangent) * 0.5;
-      const collider = RAPIER.ColliderDesc.cuboid(ROAD_HALF_WIDTH, 0.14, halfLength)
-        .setTranslation(local.x, local.y - 0.115, local.z)
-        .setRotation({
-          x: 0,
-          y: Math.sin(halfYaw),
-          z: 0,
-          w: Math.cos(halfYaw),
-        })
-        .setFriction(0.08)
-        .setRestitution(0);
-      this.physics.createCollider(collider, rigidBody);
-    }
+    return { geometry, positions, indices };
   }
 
   private buildTerrainGeometry(index: number, transition: { primary: EnvironmentProfile; secondary: EnvironmentProfile; blend: number }, anchor: THREE.Vector3): THREE.BufferGeometry {
