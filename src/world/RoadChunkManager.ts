@@ -373,9 +373,9 @@ export class RoadChunkManager {
     road.frustumCulled = true;
     group.add(road);
 
-    const terrainGeometry = this.buildTerrainGeometry(index, transition, anchor);
-    ownedGeometries.push(terrainGeometry);
-    const terrain = new THREE.Mesh(terrainGeometry, this.terrainMaterial);
+    const terrainData = this.buildTerrainGeometry(index, transition, anchor);
+    ownedGeometries.push(terrainData.geometry);
+    const terrain = new THREE.Mesh(terrainData.geometry, this.terrainMaterial);
     terrain.receiveShadow = true;
     terrain.frustumCulled = true;
     group.add(terrain);
@@ -403,6 +403,18 @@ export class RoadChunkManager {
       .setFriction(1.05)
       .setRestitution(0);
     this.physics.createCollider(roadCollider, rigidBody);
+
+    // The terrain was previously visual-only. Give the exact generated surface
+    // a matching fixed trimesh collider so vehicles can leave the asphalt,
+    // traverse shoulders and recover onto the road without falling through.
+    const terrainCollider = RAPIER.ColliderDesc.trimesh(
+      terrainData.positions,
+      terrainData.indices,
+      RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
+    )
+      .setFriction(0.95)
+      .setRestitution(0);
+    this.physics.createCollider(terrainCollider, rigidBody);
 
     this.addRoadMarkings(group, index, ownedGeometries, anchor);
     this.addUrbanRoadside(group, index, rigidBody, ownedGeometries, anchor);
@@ -489,7 +501,7 @@ export class RoadChunkManager {
     return { geometry, positions, indices };
   }
 
-  private buildTerrainGeometry(index: number, transition: { primary: EnvironmentProfile; secondary: EnvironmentProfile; blend: number }, anchor: THREE.Vector3): THREE.BufferGeometry {
+  private buildTerrainGeometry(index: number, transition: { primary: EnvironmentProfile; secondary: EnvironmentProfile; blend: number }, anchor: THREE.Vector3): RoadGeometryData {
     const columns = TERRAIN_OFFSETS.length;
     const rows = ROAD_SEGMENTS + 1;
     const positions = new Float32Array(columns * rows * 3);
@@ -545,7 +557,7 @@ export class RoadChunkManager {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
-    return geometry;
+    return { geometry, positions, indices };
   }
 
   private addRoadMarkings(

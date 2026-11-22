@@ -211,7 +211,9 @@ export class VehicleController {
       0.16,
       THREE.MathUtils.smoothstep(this.speedMps, 2, 48),
     );
-    const steeringAngle = this.smoothedSteer * maxSteer;
+    // Rapier's ray-cast wheel controller uses the opposite steering sign
+    // to the game's input convention (D/right is +1, A/left is -1).
+    const steeringAngle = -this.smoothedSteer * maxSteer;
     // Rapier's wheelBrake argument is a per-step impulse, not a force in N.
     const baseBrake = braking ? profile.brakeForce * input.brake * safeDt / 4 : 0;
     const coastBrake = this.driveThrottle < 0.015 && input.brake === 0 && this.gear !== 0
