@@ -7,7 +7,7 @@ import { RoadChunkManager } from '../world/RoadChunkManager';
 import { RoadPath } from '../world/RoadPath';
 import { VehicleController } from '../vehicles/VehicleController';
 import { EngineAudio } from '../audio/EngineAudio';
-import { UIController } from '../ui/UIController';
+import { UIController, type MiniMapRoadGeometry } from '../ui/UIController';
 import { PhysicsDebugOverlay } from '../ui/PhysicsDebugOverlay';
 import type { GameSettings, InputState, VehicleTelemetry } from '../types';
 
@@ -147,6 +147,52 @@ export class Game {
     this.physics.free();
   }
 
+  private buildMiniMapRoadGeometry(
+    playerPosition: THREE.Vector3,
+    playerForward: THREE.Vector3,
+  ): MiniMapRoadGeometry {
+    const playerDistance = this.roadPath.getDistanceAtWorldZ(
+      playerPosition.z + this.worldOffset.z,
+    );
+    const right = new THREE.Vector3(playerForward.z, 0, -playerForward.x).normalize();
+    const currentRoadTangent = this.roadPath.sample(playerDistance).tangent;
+    const pathDirection = currentRoadTangent.dot(playerForward) >= 0 ? 1 : -1;
+    const geometry: MiniMapRoadGeometry = {
+      surface: [],
+      leftEdge: [],
+      rightEdge: [],
+      leftLaneDivider: [],
+      rightLaneDivider: [],
+      centreLeft: [],
+      centreRight: [],
+    };
+
+    const project = (distance: number, lateralOffset: number): { x: number; y: number } => {
+      const sample = this.roadPath.sample(distance);
+      const point = sample.position
+        .addScaledVector(sample.right, lateralOffset)
+        .sub(this.worldOffset)
+        .sub(playerPosition);
+      return {
+        x: 85 + point.dot(right) * 0.72,
+        y: 100 - point.dot(playerForward) * 0.72,
+      };
+    };
+
+    for (let offset = -18; offset <= 110; offset += 8) {
+      const distance = playerDistance + offset * pathDirection;
+      geometry.surface.push(project(distance, 0));
+      geometry.leftEdge.push(project(distance, -9));
+      geometry.rightEdge.push(project(distance, 9));
+      geometry.leftLaneDivider.push(project(distance, -3.6));
+      geometry.rightLaneDivider.push(project(distance, 3.6));
+      geometry.centreLeft.push(project(distance, -0.22));
+      geometry.centreRight.push(project(distance, 0.22));
+    }
+
+    return geometry;
+  }
+
   private getSpawnPosition(): THREE.Vector3 {
     const position = this.roadPath.getLanePositionAtWorldZ(-70, -1.8).sub(this.worldOffset);
     position.y += 0.72;
@@ -262,6 +308,7 @@ export class Game {
       const position = this.vehicle.getPosition();
       const forward = this.vehicle.getForward();
       this.cameraRig.update(frameDt, position, forward);
+      if (this.mapVisible) this.ui.updateRoadMap(this.buildMiniMapRoadGeometry(position, forward));
       this.audio.update(
         telemetry.rpm,
         currentInput.throttle,
