@@ -142,7 +142,7 @@ export class VehicleController {
     // Rapier, which then resolves ground and obstacle contacts normally.
     const steeringAuthority = THREE.MathUtils.clamp(this.speedMps / 7.5, 0.22, 1);
     const direction = Math.abs(signedSpeed) > 0.4 ? Math.sign(signedSpeed) : 1;
-    const targetYawRate = this.smoothedSteer * (0.12 + steeringAuthority * 1.02)
+    const targetYawRate = -this.smoothedSteer * (0.12 + steeringAuthority * 1.02)
       * direction * (this.handbrake ? 1.2 : 1);
     const yawAlpha = 1 - Math.exp(-7 * safeDt);
     this.yawVelocity = THREE.MathUtils.lerp(this.body.angvel().y, targetYawRate, yawAlpha);
