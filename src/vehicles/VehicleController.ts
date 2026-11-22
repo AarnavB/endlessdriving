@@ -4,8 +4,8 @@ import type { InputState, VehicleDebugTelemetry, VehicleTelemetry } from '../typ
 import { createSportsCarVisual } from './vehicleVisual';
 
 const GEAR_RATIOS = [3.15, 2.12, 1.52, 1.18, 0.92, 0.74];
-const IDLE_RPM = 850;
-const MAX_RPM = 7200;
+export const IDLE_RPM = 850;
+export const MAX_RPM = 7200;
 export const MAX_FORWARD_SPEED = 58; // m/s, approximately 209 km/h
 const CAR_MASS = 1420;
 
