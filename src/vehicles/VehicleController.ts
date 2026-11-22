@@ -147,8 +147,8 @@ export class VehicleController {
       const gearFactor = THREE.MathUtils.clamp(gearRatio / profile.gearRatios[0], 0.3, 1);
       const speedRatio = THREE.MathUtils.clamp(this.speedMps / maxSpeedMps, 0, 1);
       const speedFade = 1 - Math.pow(speedRatio, 1.5) * 0.38;
-      const hybridAssist = this.definition.audio.induction === 'hybrid'
-        ? 1.16 - Math.min(0.16, speedRatio * 0.16)
+      const hybridAssist = profile.hybridAssist
+        ? profile.hybridAssist - Math.min(profile.hybridAssist - 1, speedRatio * (profile.hybridAssist - 1))
         : 1;
       longitudinalForce = profile.maxDriveForce * input.throttle * torqueFactor
         * gearFactor * speedFade * hybridAssist;
