@@ -3,16 +3,13 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from './InputManager';
 import { CameraRig } from './CameraRig';
 import { TrafficSystem } from './TrafficSystem';
-import { CityWorld } from '../world/CityWorld';
+import { RoadChunkManager } from '../world/RoadChunkManager';
+import { RoadPath } from '../world/RoadPath';
 import { VehicleController } from '../vehicles/VehicleController';
 import { EngineAudio } from '../audio/EngineAudio';
 import { UIController } from '../ui/UIController';
 import { PhysicsDebugOverlay } from '../ui/PhysicsDebugOverlay';
 import type { GameSettings, InputState, VehicleTelemetry } from '../types';
-
-// Keep the floor contact consistent with the chassis collider. Tyre grip is
-// modelled in VehicleController; high box-on-floor friction pins the car in place.
-const ROAD_COLLISION_FRICTION = 0.08;
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -28,7 +25,8 @@ export class Game {
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
   private latestTelemetry: VehicleTelemetry | null = null;
-  private readonly worldScene: CityWorld;
+  private readonly roadPath = new RoadPath(20261122);
+  private worldScene!: RoadChunkManager;
   private physics!: RAPIER.World;
   private vehicle!: VehicleController;
   private traffic!: TrafficSystem;
@@ -79,7 +77,6 @@ export class Game {
     this.audio.setEngineVolume(settings.engineVolume);
     this.audio.setEffectsVolume(settings.effectsVolume);
     this.cameraRig = new CameraRig(this.camera);
-    this.worldScene = new CityWorld(this.scene);
     this.ui = new UIController(uiRoot, settings);
     this.debugOverlay = new PhysicsDebugOverlay(uiRoot);
 
@@ -144,8 +141,15 @@ export class Game {
     this.audio.dispose();
     this.debugOverlay.dispose();
     this.traffic.dispose();
+    this.worldScene.dispose();
     this.renderer.dispose();
     this.physics.free();
+  }
+
+  private getSpawnPosition(): THREE.Vector3 {
+    const position = this.roadPath.getLanePositionAtWorldZ(-70, -1.8);
+    position.y += 0.72;
+    return position;
   }
 
   private toggleTransmission(): void {
@@ -159,37 +163,19 @@ export class Game {
     this.physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.physics.timestep = this.fixedTimeStep;
 
-    const floor = this.physics.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.24, 0),
-    );
-    this.physics.createCollider(
-      RAPIER.ColliderDesc.cuboid(280, 0.24, 280).setFriction(ROAD_COLLISION_FRICTION),
-      floor,
-    );
-
-    for (const obstacle of this.worldScene.getBuildingColliders()) {
-      const halfAngle = obstacle.rotation / 2;
-      const body = this.physics.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed()
-          .setTranslation(obstacle.x, obstacle.y, obstacle.z)
-          .setRotation({
-            x: 0,
-            y: Math.sin(halfAngle),
-            z: 0,
-            w: Math.cos(halfAngle),
-          }),
-      );
-      this.physics.createCollider(
-        RAPIER.ColliderDesc.cuboid(obstacle.halfWidth, obstacle.halfHeight, obstacle.halfDepth)
-          .setFriction(0.9),
-        body,
-      );
-    }
+    this.worldScene = new RoadChunkManager(this.scene, this.physics, this.roadPath);
+    const spawnPosition = this.getSpawnPosition();
+    this.worldScene.update(spawnPosition);
 
     this.vehicle = new VehicleController(this.physics, this.scene);
     this.vehicle.setManualTransmission(this.manualTransmission);
-    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
-    this.traffic = new TrafficSystem(this.physics, this.scene, -70);
+    this.vehicle.reset(spawnPosition, true);
+    this.traffic = new TrafficSystem(
+      this.physics,
+      this.scene,
+      this.roadPath,
+      this.roadPath.getDistanceAtWorldZ(spawnPosition.z),
+    );
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.latestTelemetry = this.vehicle.getTelemetry();
   }
@@ -245,6 +231,7 @@ export class Game {
 
       // Read position and velocity only after Rapier has integrated the body.
       this.latestTelemetry = this.vehicle.getTelemetry();
+      this.worldScene.update(this.vehicle.getPosition(this.trafficPlayerPosition));
       this.physicsAccumulator -= this.fixedTimeStep;
       steps++;
 
@@ -290,7 +277,10 @@ export class Game {
     this.hasStartedDriving = true;
     this.paused = false;
     this.physicsAccumulator = 0;
-    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
+    const spawnPosition = this.getSpawnPosition();
+    this.vehicle.reset(spawnPosition, true);
+    this.worldScene.reset(spawnPosition);
+    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.resetSessionProgress();
@@ -321,14 +311,19 @@ export class Game {
 
   private resetVehicle(): void {
     const position = this.vehicle.getPosition();
-    position.y = 0.72;
+    position.y = this.worldScene.sampleAtWorldZ(position.z).position.y + 0.72;
     this.vehicle.reset(position);
+    this.worldScene.reset(position);
+    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(position.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
   }
 
   private restartDrive(): void {
-    this.vehicle.reset(new THREE.Vector3(0, 0.72, -70), true);
+    const spawnPosition = this.getSpawnPosition();
+    this.vehicle.reset(spawnPosition, true);
+    this.worldScene.reset(spawnPosition);
+    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.resetSessionProgress();

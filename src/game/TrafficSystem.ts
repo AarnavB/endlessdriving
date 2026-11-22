@@ -1,22 +1,21 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { RoadPath, ROAD_LANE_OFFSETS } from '../world/RoadPath';
 
 interface TrafficVehicle {
   body: RAPIER.RigidBody;
   visual: THREE.Group;
-  laneX: number;
+  laneOffset: number;
   direction: 1 | -1;
   speed: number;
-  z: number;
+  distance: number;
   sequence: number;
 }
 
 /**
- * A small fixed pool of kinematic traffic vehicles.
- *
- * Traffic uses the main north/south avenue lanes. Vehicles are recycled ahead
- * of the player instead of allocating meshes and colliders indefinitely, so
- * the scene remains bounded during long drives.
+ * Fixed-size traffic pool. Vehicles store a scalar road distance and lateral
+ * lane offset, then sample the shared RoadPath every physics tick. No traffic
+ * object owns a private straight-road coordinate system or grows with play time.
  */
 export class TrafficSystem {
   private readonly vehicles: TrafficVehicle[] = [];
@@ -51,26 +50,62 @@ export class TrafficSystem {
   constructor(
     private readonly world: RAPIER.World,
     private readonly scene: THREE.Scene,
-    private readonly startZ: number,
+    private readonly path: RoadPath,
+    startDistance: number,
   ) {
-    this.createPool();
+    this.createPool(startDistance);
   }
 
   update(dt: number, playerPosition: THREE.Vector3): void {
     const safeDt = Math.max(0, Math.min(dt, 1 / 30));
-    for (const vehicle of this.vehicles) {
-      vehicle.z += vehicle.direction * vehicle.speed * safeDt;
+    const playerDistance = this.path.getDistanceAtWorldZ(playerPosition.z);
 
-      const relativeAhead = vehicle.z - playerPosition.z;
-      if (relativeAhead < -52 || relativeAhead > 245) {
-        // A fixed slot is reintroduced at a safe distance rather than popping
-        // into the immediate braking/collision zone in front of the player.
-        vehicle.z = playerPosition.z + 82 + vehicle.sequence * 48;
+    for (const vehicle of this.vehicles) {
+      vehicle.distance += vehicle.direction * vehicle.speed * safeDt;
+
+      const distanceAhead = vehicle.distance - playerDistance;
+      if (distanceAhead < -58 || distanceAhead > 285) {
+        // Recycle outside the immediate collision/braking zone.
+        vehicle.distance = playerDistance + 105 + vehicle.sequence * 48;
       }
 
-      this.nextPosition.x = vehicle.laneX;
-      this.nextPosition.z = vehicle.z;
+      const sample = this.path.sample(vehicle.distance);
+      const position = sample.position.clone().addScaledVector(sample.right, vehicle.laneOffset);
+      this.nextPosition.x = position.x;
+      this.nextPosition.y = position.y + 0.49;
+      this.nextPosition.z = position.z;
       vehicle.body.setNextKinematicTranslation(this.nextPosition);
+
+      const yaw = Math.atan2(sample.tangent.x, sample.tangent.z)
+        + (vehicle.direction < 0 ? Math.PI : 0);
+      const halfYaw = yaw / 2;
+      vehicle.body.setNextKinematicRotation({
+        x: 0,
+        y: Math.sin(halfYaw),
+        z: 0,
+        w: Math.cos(halfYaw),
+      });
+    }
+  }
+
+  /** Reposition the fixed pool after a full session restart. */
+  reset(playerDistance: number): void {
+    for (const vehicle of this.vehicles) {
+      vehicle.distance = playerDistance + 105 + vehicle.sequence * 48;
+      const sample = this.path.sample(vehicle.distance);
+      const position = sample.position.clone().addScaledVector(sample.right, vehicle.laneOffset);
+      const yaw = Math.atan2(sample.tangent.x, sample.tangent.z)
+        + (vehicle.direction < 0 ? Math.PI : 0);
+      const halfYaw = yaw / 2;
+      const rotation = { x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) };
+      vehicle.body.setTranslation({
+        x: position.x,
+        y: position.y + 0.49,
+        z: position.z,
+      }, true);
+      vehicle.body.setRotation(rotation, true);
+      vehicle.visual.position.set(position.x, position.y + 0.49, position.z);
+      vehicle.visual.rotation.y = yaw;
     }
   }
 
@@ -99,19 +134,24 @@ export class TrafficSystem {
     for (const material of this.bodyMaterials) material.dispose();
   }
 
-  private createPool(): void {
-    // Three vehicles in each direction, distributed along the player's route.
+  private createPool(startDistance: number): void {
+    // Three vehicles per direction across the two lanes of each carriageway.
     for (let index = 0; index < 6; index++) {
       const sequence = Math.floor(index / 2);
       const direction: 1 | -1 = index % 2 === 0 ? 1 : -1;
-      const laneX = direction === 1 ? -4.2 : 4.2;
-      const z = this.startZ + 78 + sequence * 52;
-      const yaw = direction === 1 ? 0 : Math.PI;
+      const laneOffset = direction === 1
+        ? (sequence % 2 === 0 ? ROAD_LANE_OFFSETS[0] : ROAD_LANE_OFFSETS[1])
+        : (sequence % 2 === 0 ? ROAD_LANE_OFFSETS[2] : ROAD_LANE_OFFSETS[3]);
+      const distance = startDistance + 105 + sequence * 48;
+      const sample = this.path.sample(distance);
+      const position = sample.position.clone().addScaledVector(sample.right, laneOffset);
+      const yaw = Math.atan2(sample.tangent.x, sample.tangent.z)
+        + (direction < 0 ? Math.PI : 0);
       const halfYaw = yaw / 2;
 
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.kinematicPositionBased()
-          .setTranslation(laneX, 0.49, z)
+          .setTranslation(position.x, position.y + 0.49, position.z)
           .setRotation({ x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) })
           .setCanSleep(false),
       );
@@ -123,17 +163,17 @@ export class TrafficSystem {
       );
 
       const visual = this.createVehicleVisual(this.bodyMaterials[index]);
-      visual.position.set(laneX, 0.49, z);
+      visual.position.set(position.x, position.y + 0.49, position.z);
       visual.rotation.y = yaw;
       this.scene.add(visual);
 
       this.vehicles.push({
         body,
         visual,
-        laneX,
+        laneOffset,
         direction,
         speed: direction === 1 ? 12 + sequence * 1.2 : 15 + sequence * 1.4,
-        z,
+        distance,
         sequence,
       });
     }
