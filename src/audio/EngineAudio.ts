@@ -225,6 +225,9 @@ export class EngineAudio {
     this.exhaustResonance.connect(this.exhaustLowPass);
     this.exhaustLowPass.connect(this.engineGain);
     this.engineGain.connect(this.master);
+    // The master must terminate at the device output; without this connection
+    // every oscillator and filter runs internally but the player hears nothing.
+    this.master.connect(ctx.destination);
     this.master.gain.value = 0.88;
     this.engineGain.gain.value = this.engineVolume * 0.72;
 
