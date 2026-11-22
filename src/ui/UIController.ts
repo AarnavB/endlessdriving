@@ -27,7 +27,7 @@ const createGaugeMarkup = (
     const ratio = i / tickCount;
     const tickValue = minimumValue + ratio * valueRange;
     const angle = 90 + ratio * 270;
-    const major = i % majorEvery === 0;
+    const major = i % majorEvery === 0 || i === tickCount;
     const [x1, y1] = polarPoint(major ? 94 : 99, angle);
     const [x2, y2] = polarPoint(106, angle);
     const isRedline = tickValue >= redlineStart;
