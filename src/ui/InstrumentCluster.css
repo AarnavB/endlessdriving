@@ -409,3 +409,55 @@
     transition: none;
   }
 }
+
+/* Keep progression metrics visible when the viewport narrows. */
+@media (max-width: 900px) {
+  .top-metrics {
+    gap: 13px;
+  }
+
+  .top-metrics > div:nth-child(1),
+  .top-metrics > div:nth-child(5) {
+    display: none;
+  }
+
+  .top-metrics > div:nth-child(2) {
+    display: block;
+  }
+
+  .top-metrics .metric-kicker {
+    font-size: 6px;
+    letter-spacing: 1px;
+  }
+
+  .top-metrics strong {
+    font-size: 9px;
+    letter-spacing: .5px;
+  }
+}
+
+@media (max-width: 640px) {
+  .top-metrics {
+    gap: 8px;
+    margin-right: 8px;
+  }
+
+  .top-metrics > div:nth-child(1),
+  .top-metrics > div:nth-child(5) {
+    display: none;
+  }
+
+  .top-metrics > div:nth-child(2) {
+    display: block;
+  }
+
+  .top-metrics .metric-kicker {
+    font-size: 5px;
+    letter-spacing: .7px;
+  }
+
+  .top-metrics strong {
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+}
