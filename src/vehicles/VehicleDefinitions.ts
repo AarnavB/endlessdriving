@@ -18,6 +18,8 @@ export interface VehiclePhysicsProfile {
   wheelRadiusM: number;
   finalDrive: number;
   transferDrive: number;
+  /** Additional low-speed motor assist for hybrid powertrains. */
+  hybridAssist?: number;
   gearRatios: readonly number[];
   torqueCurve: readonly [number, number][];
 }
@@ -163,6 +165,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       massKg: 1585, maxDriveForce: 15100, maxSpeedKmh: 352, brakeForce: 21800,
       lateralGrip: 6900, handbrakeGrip: 1650, steeringResponse: 1.08,
       engineBrakeForce: 790, wheelRadiusM: 0.34, finalDrive: 3.1, transferDrive: 1,
+      hybridAssist: 1.16,
       gearRatios: [3.10, 2.18, 1.63, 1.29, 1.03, 0.84, 0.69], torqueCurve: laFerrariTorqueCurve,
     },
     audio: {
