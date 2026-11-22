@@ -152,10 +152,10 @@ export class VehicleController {
     this.scratchQuat.set(q.x, q.y, q.z, q.w);
     this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
 
-    const bodyVelocity = this.body.linvel();
+    let bodyVelocity = this.body.linvel();
     this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
     this.speedMps = this.velocity.length();
-    const signedSpeed = this.velocity.dot(this.forward);
+    let signedSpeed = this.velocity.dot(this.forward);
 
     this.handbrake = input.handbrake;
     this.driveThrottle = THREE.MathUtils.damp(
@@ -176,6 +176,27 @@ export class VehicleController {
     // Shift before calculating this tick's wheel torque so the new ratio is
     // applied immediately rather than one simulation frame late.
     this.updateTransmission(input, signedSpeed);
+
+    // Enforce the mechanical road speed implied by the selected gear and
+    // engine redline. This is a drivetrain constraint, not just a dashboard
+    // RPM clamp: first gear cannot propel the car at its top-gear speed.
+    const gearSpeedLimit = Math.min(
+      this.definition.physics.maxSpeedKmh / 3.6,
+      this.calculateGearSpeedLimitMps(this.gear),
+    );
+    if (this.gear > 0 && signedSpeed > gearSpeedLimit) {
+      const excessForwardSpeed = signedSpeed - gearSpeedLimit;
+      this.velocity.addScaledVector(this.forward, -excessForwardSpeed);
+      this.body.setLinvel({
+        x: this.velocity.x,
+        y: bodyVelocity.y,
+        z: this.velocity.z,
+      }, true);
+      bodyVelocity = this.body.linvel();
+      this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
+      this.speedMps = this.velocity.length();
+      signedSpeed = this.velocity.dot(this.forward);
+    }
 
     const profile = this.definition.physics;
     const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
@@ -216,8 +237,8 @@ export class VehicleController {
     const revLimiter = this.gear === 0
       ? 1
       : 1 - THREE.MathUtils.smoothstep(
-        this.definition.maxRpm * 1.005,
-        this.definition.maxRpm * 1.03,
+        this.definition.maxRpm * 0.985,
+        this.definition.maxRpm,
         rawCoupledRpm,
       );
     const engineForce = this.gear === 0
@@ -296,6 +317,24 @@ export class VehicleController {
 
     // Evaluate tyre contacts before the matching Rapier fixed-step.
     this.wheelController.updateVehicle(safeDt, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
+
+    // Aerodynamic drag grows with velocity squared; rolling resistance
+    // prevents the car coasting indefinitely when the engine is off-load.
+    if (this.speedMps > 0.05) {
+      const airDensity = 1.225;
+      const dragArea = 0.76; // Cd × frontal area, representative supercar value.
+      const aerodynamicDrag = 0.5 * airDensity * dragArea * this.speedMps * this.speedMps;
+      const rollingResistance = profile.massKg * 9.81 * 0.012;
+      const stoppingForceLimit = profile.massKg * this.speedMps / safeDt * 0.8;
+      const roadLoad = Math.min(aerodynamicDrag + rollingResistance, stoppingForceLimit);
+      const dragScale = -roadLoad / this.speedMps;
+      this.body.addForce({
+        x: this.velocity.x * dragScale,
+        y: 0,
+        z: this.velocity.z * dragScale,
+      }, true);
+    }
+
     if (reversingFromRest && reverseForce !== 0) {
       // Rapier's current ray-cast controller only takes positive engine-force
       // values, so the very-low-speed reverse manoeuvre uses a chassis force.
@@ -535,6 +574,17 @@ export class VehicleController {
     const ratio = profile.gearRatios[gear - 1] ?? profile.gearRatios[0];
     const wheelRpm = speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
     return wheelRpm * ratio * profile.finalDrive * profile.transferDrive;
+  }
+
+  /** Road speed at engine redline for the requested forward gear, in m/s. */
+  private calculateGearSpeedLimitMps(gear: number): number {
+    if (gear <= 0) return Number.POSITIVE_INFINITY;
+    const profile = this.definition.physics;
+    const ratio = profile.gearRatios[gear - 1];
+    if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+    const totalReduction = ratio * profile.finalDrive * profile.transferDrive;
+    const wheelRevolutionsPerSecond = this.definition.maxRpm / 60 / totalReduction;
+    return wheelRevolutionsPerSecond * 2 * Math.PI * profile.wheelRadiusM;
   }
 
   private getTorqueFactor(rpm: number): number {
