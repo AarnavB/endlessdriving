@@ -164,8 +164,13 @@ export class VehicleController {
       input.throttle > this.driveThrottle ? 12 : 16,
       safeDt,
     );
+    // A slower steering rack response filters abrupt digital keyboard inputs.
+    // Vehicle-specific response remains a small modifier, not a large sensitivity multiplier.
     this.smoothedSteer = THREE.MathUtils.damp(
-      this.smoothedSteer, input.steer, this.definition.physics.steeringResponse * 9, safeDt,
+      this.smoothedSteer,
+      input.steer,
+      this.definition.physics.steeringResponse * 4.5,
+      safeDt,
     );
 
     const profile = this.definition.physics;
@@ -206,14 +211,38 @@ export class VehicleController {
       : 0;
     const wheelDriveForce = braking || reversingFromRest ? 0 : drivePerWheel;
 
-    const maxSteer = THREE.MathUtils.lerp(
-      0.52,
-      0.16,
-      THREE.MathUtils.smoothstep(this.speedMps, 2, 48),
-    );
-    // Rapier's ray-cast wheel controller uses the opposite steering sign
-    // to the game's input convention (D/right is +1, A/left is -1).
-    const steeringAngle = -this.smoothedSteer * maxSteer;
+    // Progressive steering lock: limit tyre angle as road speed rises.
+    // These are road-wheel angles, not steering-wheel rotations.
+    const speedSteerBlend = THREE.MathUtils.smoothstep(this.speedMps, 2.5, 42);
+    const maxSteerAngle = THREE.MathUtils.lerp(0.34, 0.055, speedSteerBlend);
+    const centreSteerAngle = THREE.MathUtils.clamp(this.smoothedSteer, -1, 1) * maxSteerAngle;
+
+    // Ackermann geometry: the front tyres converge on a shared instantaneous
+    // turn centre on the rear-axle line. The inside front wheel therefore turns
+    // farther than the outside wheel. Rear wheels remain straight.
+    let leftFrontSteer = 0;
+    let rightFrontSteer = 0;
+    const turnMagnitude = Math.abs(centreSteerAngle);
+    if (turnMagnitude > 1e-4) {
+      const wheelbase = this.definition.visual.wheelBase;
+      const halfTrack = this.definition.visual.wheelTrack * 0.5;
+      const turnRadius = wheelbase / Math.tan(turnMagnitude);
+      const innerAngle = Math.atan(wheelbase / Math.max(0.1, turnRadius - halfTrack));
+      const outerAngle = Math.atan(wheelbase / (turnRadius + halfTrack));
+
+      // Rapier's ray-cast controller uses the opposite steering sign to the
+      // game's input convention (D/right is +1, A/left is -1).
+      const controllerSign = -Math.sign(centreSteerAngle);
+      if (centreSteerAngle > 0) {
+        // Right turn: right front tyre is inside.
+        leftFrontSteer = controllerSign * outerAngle;
+        rightFrontSteer = controllerSign * innerAngle;
+      } else {
+        // Left turn: left front tyre is inside.
+        leftFrontSteer = controllerSign * innerAngle;
+        rightFrontSteer = controllerSign * outerAngle;
+      }
+    }
     // Rapier's wheelBrake argument is a per-step impulse, not a force in N.
     const baseBrake = braking ? profile.brakeForce * input.brake * safeDt / 4 : 0;
     const coastBrake = this.driveThrottle < 0.015 && input.brake === 0 && this.gear !== 0
@@ -230,7 +259,10 @@ export class VehicleController {
         baseBrake + (this.handbrake && !front ? handbrakeImpulse : 0)
           + (driven ? coastBrake : 0),
       );
-      this.wheelController.setWheelSteering(i, front ? steeringAngle : 0);
+      this.wheelController.setWheelSteering(
+        i,
+        i === 1 ? leftFrontSteer : i === 3 ? rightFrontSteer : 0,
+      );
     }
 
     // Evaluate tyre contacts before the matching Rapier fixed-step.
