@@ -184,7 +184,7 @@ export class UIController {
     this.settings = settings;
     if (speedUnitChanged) {
       const gauge = this.root.querySelector<HTMLElement>('.speed-gauge');
-      gauge?.replaceWith(this.renderSpeedGauge(settings.speedUnit));
+      if (gauge) gauge.outerHTML = this.renderSpeedGauge(settings.speedUnit);
     }
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* storage may be blocked */ }
     this.root.querySelector<HTMLElement>('#fps-value')?.classList.toggle('hidden', !settings.showFps);
