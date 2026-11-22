@@ -398,7 +398,7 @@ export class UIController {
 
   private render(): void {
     const savedControls = [
-      ['W / ↑', 'Accelerate'], ['S / ↓', 'Brake / reverse'], ['A D / ← →', 'Steer'],
+      ['W / ↑', 'Accelerate'], ['S / ↓', 'Brake; hold at a stop to reverse'], ['A D / ← →', 'Steer'],
       ['SPACE', 'Handbrake'], ['E / Q', 'Shift up / down (manual; Q from 1 selects neutral)'],
       ['GEAR SELECTOR', 'Select neutral or Drive / a forward gear'], ['M', 'Toggle auto / manual'],
       ['C', 'Change camera'], ['R', 'Reset vehicle'], ['ESC', 'Pause game'], ['H', 'Toggle HUD'],

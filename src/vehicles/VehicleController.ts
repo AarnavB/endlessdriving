@@ -72,6 +72,8 @@ export class VehicleController {
   private handbrake = false;
   private manualTransmission = false;
   private driveThrottle = 0;
+  private brakeToReverseTime = 0;
+  private reverseEngaged = false;
   private reverseAudioLatched = false;
 
   constructor(world: RAPIER.World, scene: THREE.Scene, definition: VehicleDefinition) {
@@ -177,25 +179,34 @@ export class VehicleController {
     // applied immediately rather than one simulation frame late.
     this.updateTransmission(input, signedSpeed);
 
-    // Reverse is intentionally controlled by the brake key only after the
-    // car has slowed almost to a stop. Throttle takes priority if both keys
-    // are held, so conflicting input can never command reverse propulsion.
+    // S/Down is a brake while the car is moving forward. Reverse only
+    // engages after the chassis has reached a genuine standstill and the
+    // driver keeps the brake input held for a short engagement interval.
     const reverseRequested = input.brake > 0
       && input.throttle < 0.05
       && this.gear !== 0;
+    if (!reverseRequested) {
+      this.brakeToReverseTime = 0;
+      this.reverseEngaged = false;
+    } else if (!this.reverseEngaged && this.speedMps <= 0.18) {
+      this.brakeToReverseTime += safeDt;
+      if (this.brakeToReverseTime >= 0.4) this.reverseEngaged = true;
+    } else if (!this.reverseEngaged) {
+      this.brakeToReverseTime = 0;
+    }
+    const reverseMode = reverseRequested && this.reverseEngaged;
 
-    // Keep the drivetrain constrained in both directions. A forward gear
-    // cannot let an accidental negative velocity build without bound.
+    // Keep the forward redline limit gear-specific, while permitting a
+    // controlled reverse speed instead of snapping backward motion to 0.75 m/s.
     const gearSpeedLimit = Math.min(
       this.definition.physics.maxSpeedKmh / 3.6,
       this.calculateGearSpeedLimitMps(this.gear),
     );
-    const reverseSpeedLimit = reverseRequested ? 6 : 0.75; // 21.6 km/h in reverse; small residual rollback otherwise.
-    const minimumSignedSpeed = -reverseSpeedLimit;
-    if (this.gear > 0 && (signedSpeed > gearSpeedLimit || signedSpeed < minimumSignedSpeed)) {
+    const reverseSpeedLimit = 6; // 21.6 km/h; reverse is capped independently of forward gearing.
+    if (this.gear > 0 && (signedSpeed > gearSpeedLimit || signedSpeed < -reverseSpeedLimit)) {
       const clampedSignedSpeed = THREE.MathUtils.clamp(
         signedSpeed,
-        minimumSignedSpeed,
+        -reverseSpeedLimit,
         gearSpeedLimit,
       );
       this.velocity.addScaledVector(this.forward, clampedSignedSpeed - signedSpeed);
@@ -223,9 +234,10 @@ export class VehicleController {
       : 1;
 
     const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
+    const coupledGear = signedSpeed < -0.15 ? 1 : this.gear;
     const rawCoupledRpm = this.gear === 0
       ? idleRpm
-      : this.calculateRawCoupledRpm(this.gear, Math.abs(signedSpeed));
+      : this.calculateRawCoupledRpm(coupledGear, Math.abs(signedSpeed));
     const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.35, 4.2);
     const coupledTorqueRpm = THREE.MathUtils.clamp(rawCoupledRpm, idleRpm, this.definition.maxRpm);
     const torqueRpm = this.gear === 0
@@ -261,16 +273,17 @@ export class VehicleController {
     const drivenWheels = this.definition.drivetrain.toLowerCase().includes('all-wheel')
       ? [0, 1, 2, 3]
       : [0, 2];
-    // Rapier's vehicle solver applies half of each wheel's longitudinal
-    // impulse; compensate so maxDriveForce remains the vehicle-level force.
+    // Rapier applies half of each wheel's longitudinal impulse.
+    // Divide the vehicle-level target force across driven wheels accordingly.
     const drivePerWheel = engineForce * 2 / drivenWheels.length;
-
-    const reverseMode = reverseRequested && signedSpeed <= 0.55;
     const braking = input.brake > 0 && !reverseMode;
-    const reverseForce = reverseMode && signedSpeed > -6
-      ? -profile.maxDriveForce * 0.28 * input.brake * torqueFactor
+    const reverseForce = reverseMode && signedSpeed > -reverseSpeedLimit
+      ? -profile.maxDriveForce * 0.22 * input.brake * torqueFactor
       : 0;
-    const wheelDriveForce = braking || reverseMode ? 0 : drivePerWheel;
+    // Rapier's wheel engine force is signed: negative force drives the tyres
+    // backward through the same contact/friction solver as forward propulsion.
+    const reversePerWheel = reverseForce * 2 / drivenWheels.length;
+    const wheelDriveForce = braking ? 0 : reverseMode ? reversePerWheel : drivePerWheel;
 
     // Progressive steering lock: limit tyre angle as road speed rises.
     // These are road-wheel angles, not steering-wheel rotations.
@@ -291,9 +304,10 @@ export class VehicleController {
       const innerAngle = Math.atan(wheelbase / Math.max(0.1, turnRadius - halfTrack));
       const outerAngle = Math.atan(wheelbase / (turnRadius + halfTrack));
 
-      // Rapier's ray-cast controller uses the opposite steering sign to the
-      // game's input convention (D/right is +1, A/left is -1).
-      const controllerSign = -Math.sign(centreSteerAngle);
+      // Rapier rotates the wheel axle about chassis-up before deriving its
+      // rolling direction. With our -X axle, positive input must stay positive
+      // for D/right to turn the front wheels to the vehicle's right.
+      const controllerSign = Math.sign(centreSteerAngle);
       if (centreSteerAngle > 0) {
         // Right turn: right front tyre is inside.
         leftFrontSteer = controllerSign * outerAngle;
@@ -346,15 +360,8 @@ export class VehicleController {
       }, true);
     }
 
-    if (reverseMode && reverseForce !== 0) {
-      // Rapier's current ray-cast controller only takes positive engine-force
-      // values, so the very-low-speed reverse manoeuvre uses a chassis force.
-      this.body.addForce({
-        x: this.forward.x * reverseForce,
-        y: 0,
-        z: this.forward.z * reverseForce,
-      }, true);
-    }
+    // Reverse is transmitted through the driven tyres above; do not add a
+    // second chassis-level force, which bypasses tyre contact and traction.
     this.lastAppliedForwardForce = reverseMode ? reverseForce : (braking ? 0 : engineForce);
 
     if (reverseMode && !this.reverseAudioLatched) {
@@ -544,6 +551,8 @@ export class VehicleController {
     this.smoothedSteer = 0;
     this.lastAppliedForwardForce = 0;
     this.driveThrottle = 0;
+    this.brakeToReverseTime = 0;
+    this.reverseEngaged = false;
     this.lastShiftAt = 0;
     this.shiftEvents.length = 0;
     this.reverseAudioLatched = false;
@@ -669,7 +678,8 @@ export class VehicleController {
       return;
     }
 
-    if (this.gear === 0) return;
+    if (this.gear === 0 || signedSpeed < -0.25) return;
+    // Do not upshift/downshift the forward gearbox while the vehicle is moving backward.
     // Keep automatic shifts sequential and prevent hunting around a shift point.
     if (performance.now() - this.lastShiftAt < 240) return;
     const projectedRpm = this.calculateRawCoupledRpm(this.gear, Math.abs(signedSpeed));
