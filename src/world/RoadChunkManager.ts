@@ -373,7 +373,12 @@ export class RoadChunkManager {
         group.position.z,
       ),
     );
-    const roadCollider = RAPIER.ColliderDesc.trimesh(roadData.positions, roadData.indices)
+    // Fix Rapier ghost contacts along adjacent triangles on the continuous road surface.
+    const roadCollider = RAPIER.ColliderDesc.trimesh(
+      roadData.positions,
+      roadData.indices,
+      RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
+    )
       .setFriction(0.08)
       .setRestitution(0);
     this.physics.createCollider(roadCollider, rigidBody);

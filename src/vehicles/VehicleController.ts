@@ -175,11 +175,17 @@ export class VehicleController {
     const gearRatio = this.gear === 0 ? 0 : (GEAR_RATIOS[this.gear - 1] ?? GEAR_RATIOS[0]);
     const estimatedRpm = IDLE_RPM + Math.abs(signedSpeed) * gearRatio * 62;
     const freeRevRpm = IDLE_RPM + input.throttle * (MAX_RPM - IDLE_RPM) * 0.82;
+    const coupledRpm = THREE.MathUtils.clamp(
+      estimatedRpm + input.throttle * 450,
+      IDLE_RPM,
+      MAX_RPM,
+    );
+    // A simplified slipping clutch lets the engine rev while stationary,
+    // then couples RPM progressively to wheel speed as the car launches.
+    const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.8, 7.5);
     const targetRpm = this.gear === 0
       ? freeRevRpm
-      : input.throttle > 0 && this.speedMps < 3
-        ? IDLE_RPM + 2500 * input.throttle
-        : THREE.MathUtils.clamp(estimatedRpm + input.throttle * 800, IDLE_RPM, MAX_RPM);
+      : THREE.MathUtils.lerp(freeRevRpm, coupledRpm, clutchEngagement);
     this.rpm = THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 8 : 4.5, safeDt);
 
     for (const wheel of this.wheelMeshes) wheel.rotation.x -= signedSpeed * safeDt / 0.34;
@@ -306,13 +312,24 @@ export class VehicleController {
       .normalize();
   }
 
-  reset(position = new THREE.Vector3(0, 0.72, -70), resetDistance = false): void {
+  reset(
+    position = new THREE.Vector3(0, 0.72, -70),
+    resetDistance = false,
+    roadHeading = new THREE.Vector3(0, 0, 1),
+  ): void {
     this.body.resetForces(true);
     this.body.resetTorques(true);
     this.body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-    this.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    const heading = roadHeading.clone().setY(0).normalize();
+    const yaw = Math.atan2(heading.x, heading.z);
+    this.body.setRotation({
+      x: 0,
+      y: Math.sin(yaw / 2),
+      z: 0,
+      w: Math.cos(yaw / 2),
+    }, true);
     if (resetDistance) this.distanceKm = 0;
     this.lastDistanceX = position.x;
     this.lastDistanceZ = position.z;
