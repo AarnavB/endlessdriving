@@ -110,7 +110,7 @@
 
 .gauge-needle {
   transform-box: view-box;
-  transform-origin: 120px 120px;
+  transform-origin: 50% 50%;
   transition: transform 90ms cubic-bezier(.2, .72, .26, 1);
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .72));
 }
