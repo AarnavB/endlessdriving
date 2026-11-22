@@ -20,6 +20,7 @@ interface TrafficVehicle {
  */
 export class TrafficSystem {
   private readonly vehicles: TrafficVehicle[] = [];
+  private readonly nextPosition = { x: 0, y: 0.49, z: 0 };
   private readonly chassisGeometry = new THREE.BoxGeometry(1.72, 0.52, 3.55);
   private readonly roofGeometry = new THREE.BoxGeometry(1.38, 0.52, 1.82);
   private readonly wheelGeometry = new THREE.CylinderGeometry(0.31, 0.31, 0.22, 10);
@@ -67,11 +68,9 @@ export class TrafficSystem {
         vehicle.z = playerPosition.z + 82 + vehicle.sequence * 48;
       }
 
-      vehicle.body.setNextKinematicTranslation({
-        x: vehicle.laneX,
-        y: 0.49,
-        z: vehicle.z,
-      });
+      this.nextPosition.x = vehicle.laneX;
+      this.nextPosition.z = vehicle.z;
+      vehicle.body.setNextKinematicTranslation(this.nextPosition);
     }
   }
 
