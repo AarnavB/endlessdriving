@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ENVIRONMENT_PROFILES, getEnvironmentTransition, selectEnvironmentForFeature } from './EnvironmentProfiles';
 import type { EnvironmentKind, EnvironmentProfile } from './EnvironmentProfiles';
-import { RoadPath, RoadSample, ROAD_CHUNK_LENGTH, ROAD_HALF_WIDTH } from './RoadPath';
+import { RoadPath, ROAD_CHUNK_LENGTH, ROAD_HALF_WIDTH } from './RoadPath';
+import type { RoadSample } from './RoadPath';
 import { SeededRandom, hashSeed } from './SeededRandom';
 
 interface RoadChunk {
