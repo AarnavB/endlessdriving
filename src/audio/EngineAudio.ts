@@ -24,6 +24,14 @@ export class EngineAudio {
   private exhaustLowPass: BiquadFilterNode | null = null;
   private blockGain: GainNode | null = null;
 
+  // A deterministic, firing-rate-locked exhaust transient. Silent between
+  // combustion pulses, it adds bark/rasp without a continuous hiss.
+  private raspSource: AudioBufferSourceNode | null = null;
+  private raspGain: GainNode | null = null;
+  private raspHighPass: BiquadFilterNode | null = null;
+  private raspBandPass: BiquadFilterNode | null = null;
+  private raspLowPass: BiquadFilterNode | null = null;
+
   private currentVehicleId: VehicleDefinition['id'] | null = null;
   private currentProfile: VehicleAudioProfile | null = null;
   private started = false;
@@ -49,7 +57,9 @@ export class EngineAudio {
     const ctx = this.context;
     if (!ctx || !this.started || !this.combustionOsc || !this.blockOsc
       || !this.engineGain || !this.blockGain || !this.bodyFilter
-      || !this.exhaustResonance || !this.exhaustLowPass) return;
+      || !this.exhaustResonance || !this.exhaustLowPass
+      || !this.raspSource || !this.raspGain || !this.raspHighPass
+      || !this.raspBandPass || !this.raspLowPass) return;
 
     if (this.currentVehicleId !== definition.id) {
       this.applyVehicleProfile(definition);
@@ -69,6 +79,7 @@ export class EngineAudio {
     // A quiet mechanical-block component adds weight without introducing a
     // separate whine or an unrelated ambience/noise layer.
     this.blockOsc.frequency.setTargetAtTime(crankHz * 2, now, 0.055);
+    this.raspSource.playbackRate.setTargetAtTime(firingFrequency / 80, now, 0.045);
 
     this.engineGain.gain.setTargetAtTime(
       this.engineVolume * (0.58 + load * 0.42) * shiftCut,
@@ -76,9 +87,27 @@ export class EngineAudio {
       0.055,
     );
     this.blockGain.gain.setTargetAtTime(
-      this.engineVolume * profile.exhaustBodyGain * (0.075 + load * 0.055),
+      this.engineVolume * profile.exhaustBodyGain * (0.045 + load * 0.035),
       now,
       0.07,
+    );
+    // Stronger under load, but still present on overrun and at idle.
+    this.raspGain.gain.setTargetAtTime(
+      this.engineVolume * (0.29 + profile.saturation * 0.075) * (0.28 + load * 0.72),
+      now,
+      0.045,
+    );
+    this.raspHighPass.frequency.setTargetAtTime(240 + normalizedRpm * 110, now, 0.08);
+    const raspCenter = profile.cylinders === 8 ? 1150 : profile.cylinders === 10 ? 1480 : 1300;
+    this.raspBandPass.frequency.setTargetAtTime(
+      raspCenter * (0.92 + normalizedRpm * 0.28),
+      now,
+      0.09,
+    );
+    this.raspLowPass.frequency.setTargetAtTime(
+      Math.min(5200, profile.maxExhaustHz * (1.15 + normalizedRpm * 0.12)),
+      now,
+      0.09,
     );
 
     // Keep the exhaust body dominant. Higher RPM opens the exhaust slightly,
@@ -97,7 +126,7 @@ export class EngineAudio {
     this.exhaustLowPass.frequency.setTargetAtTime(
       Math.min(
         profile.maxExhaustHz,
-        profile.maxExhaustHz * (0.64 + normalizedRpm * 0.36) + load * 85,
+        profile.maxExhaustHz * (0.48 + normalizedRpm * 0.52) + load * 260,
       ),
       now,
       0.095,
@@ -156,6 +185,7 @@ export class EngineAudio {
   dispose(): void {
     try { this.combustionOsc?.stop(); } catch { /* already stopped */ }
     try { this.blockOsc?.stop(); } catch { /* already stopped */ }
+    try { this.raspSource?.stop(); } catch { /* already stopped */ }
 
     this.combustionOsc?.disconnect();
     this.blockOsc?.disconnect();
@@ -164,6 +194,11 @@ export class EngineAudio {
     this.exhaustResonance?.disconnect();
     this.exhaustLowPass?.disconnect();
     this.blockGain?.disconnect();
+    this.raspSource?.disconnect();
+    this.raspGain?.disconnect();
+    this.raspHighPass?.disconnect();
+    this.raspBandPass?.disconnect();
+    this.raspLowPass?.disconnect();
     this.engineGain?.disconnect();
     this.master?.disconnect();
 
@@ -179,6 +214,11 @@ export class EngineAudio {
     this.exhaustResonance = null;
     this.exhaustLowPass = null;
     this.blockGain = null;
+    this.raspSource = null;
+    this.raspGain = null;
+    this.raspHighPass = null;
+    this.raspBandPass = null;
+    this.raspLowPass = null;
     this.currentVehicleId = null;
     this.currentProfile = null;
     this.started = false;
@@ -191,6 +231,20 @@ export class EngineAudio {
     this.master = ctx.createGain();
     this.engineGain = ctx.createGain();
     this.blockGain = ctx.createGain();
+
+    this.raspGain = ctx.createGain();
+    this.raspGain.gain.value = 0;
+    this.raspHighPass = ctx.createBiquadFilter();
+    this.raspHighPass.type = 'highpass';
+    this.raspHighPass.frequency.value = 240;
+    this.raspBandPass = ctx.createBiquadFilter();
+    this.raspBandPass.type = 'bandpass';
+    this.raspBandPass.frequency.value = 1300;
+    this.raspBandPass.Q.value = 0.72;
+    this.raspLowPass = ctx.createBiquadFilter();
+    this.raspLowPass.type = 'lowpass';
+    this.raspLowPass.frequency.value = 3600;
+    this.raspLowPass.Q.value = 0.62;
 
     this.saturation = ctx.createWaveShaper();
     this.saturation.oversample = '4x';
@@ -208,7 +262,7 @@ export class EngineAudio {
 
     this.exhaustLowPass = ctx.createBiquadFilter();
     this.exhaustLowPass.type = 'lowpass';
-    this.exhaustLowPass.frequency.value = 900;
+    this.exhaustLowPass.frequency.value = 2500;
     this.exhaustLowPass.Q.value = 0.58;
 
     this.combustionOsc = ctx.createOscillator();
@@ -224,6 +278,12 @@ export class EngineAudio {
     this.bodyFilter.connect(this.exhaustResonance);
     this.exhaustResonance.connect(this.exhaustLowPass);
     this.exhaustLowPass.connect(this.engineGain);
+    // Keep the rasp on an independent level path so the exhaust edge is clear
+    // without thinning the main low-frequency engine body.
+    this.raspGain.connect(this.raspHighPass);
+    this.raspHighPass.connect(this.raspBandPass);
+    this.raspBandPass.connect(this.raspLowPass);
+    this.raspLowPass.connect(this.master);
     this.engineGain.connect(this.master);
     // The master must terminate at the device output; without this connection
     // every oscillator and filter runs internally but the player hears nothing.
@@ -249,11 +309,11 @@ export class EngineAudio {
     // A mild asymmetric soft clip adds exhaust bark without the fizz of hard
     // clipping. The saturation amount is authored per engine.
     const curve = new Float32Array(2048);
-    const drive = profile.saturation;
+    const drive = profile.saturation * 1.28;
     const normalizer = Math.tanh(drive);
     for (let i = 0; i < curve.length; i++) {
       const input = (i / (curve.length - 1)) * 2 - 1;
-      const asymmetric = input >= 0 ? input * drive : input * drive * 0.86;
+      const asymmetric = input >= 0 ? input * drive * 1.08 : input * drive * 0.82;
       curve[i] = Math.tanh(asymmetric) / normalizer;
     }
     this.saturation.curve = curve;
@@ -265,6 +325,18 @@ export class EngineAudio {
       ctx.currentTime,
     );
     this.exhaustLowPass.frequency.setValueAtTime(profile.maxExhaustHz * 0.72, ctx.currentTime);
+
+    if (this.raspSource) {
+      try { this.raspSource.stop(); } catch { /* already stopped */ }
+      this.raspSource.disconnect();
+    }
+    const raspSource = ctx.createBufferSource();
+    raspSource.buffer = this.createExhaustRaspBuffer(ctx, profile);
+    raspSource.loop = true;
+    raspSource.playbackRate.setValueAtTime(0.75, ctx.currentTime);
+    raspSource.connect(this.raspGain!);
+    raspSource.start();
+    this.raspSource = raspSource;
   }
 
   private createExhaustPulseWave(
@@ -272,7 +344,7 @@ export class EngineAudio {
     profile: VehicleAudioProfile,
   ): PeriodicWave {
     const sampleCount = 512;
-    const harmonicCount = 96;
+    const harmonicCount = 128;
     const pulse = new Float32Array(sampleCount);
     let mean = 0;
 
@@ -305,6 +377,42 @@ export class EngineAudio {
     }
 
     return ctx.createPeriodicWave(real, imag, { disableNormalization: false });
+  }
+
+  /**
+   * One deterministic exhaust-turbulence puff at an 80 Hz reference firing
+   * rate. Playback rate follows engine firing frequency, and the buffer returns
+   * to silence between pulses, so it never becomes a continuous hiss layer.
+   */
+  private createExhaustRaspBuffer(
+    ctx: AudioContext,
+    profile: VehicleAudioProfile,
+  ): AudioBuffer {
+    const referenceFiringHz = 80;
+    const frameCount = Math.max(256, Math.round(ctx.sampleRate / referenceFiringHz));
+    const buffer = ctx.createBuffer(1, frameCount, ctx.sampleRate);
+    const samples = buffer.getChannelData(0);
+
+    let seed = (0x6d2b79f5 ^ (profile.cylinders << 16)
+      ^ Math.floor(profile.pulseWidth * 1000)) >>> 0;
+    let colouredNoise = 0;
+    const pulseEnd = Math.min(0.42, profile.pulseWidth * 2.5);
+    const decay = Math.max(0.035, profile.pulseWidth * 0.92);
+
+    for (let i = 0; i < frameCount; i++) {
+      const phase = i / frameCount;
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const white = (seed / 0x100000000) * 2 - 1;
+      colouredNoise += (white - colouredNoise) * 0.34;
+
+      const envelope = phase < pulseEnd ? Math.exp(-phase / decay) : 0;
+      const fastAttack = Math.min(1, phase / 0.012);
+      const sharpCombustionEdge = phase < profile.pulseWidth * 0.18 ? 1.22 : 1;
+      samples[i] = (white * 0.88 + colouredNoise * 0.12)
+        * envelope * fastAttack * sharpCombustionEdge * 0.76;
+    }
+
+    return buffer;
   }
 
   private playCombustionFlare(

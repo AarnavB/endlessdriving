@@ -130,7 +130,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     audio: {
       cylinders: 8, induction: 'twin-turbo', pulseWidth: 0.15,
       exhaustResonanceHz: 112, exhaustBodyGain: 0.98,
-      saturation: 2.35, maxExhaustHz: 820,
+      saturation: 2.75, maxExhaustHz: 3300,
     },
     visual: {
       paint: 0xb91f27, bodyWidth: 1.9, bodyLength: 4.42, bodyHeight: 0.56,
@@ -167,7 +167,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     audio: {
       cylinders: 12, induction: 'hybrid', pulseWidth: 0.10,
       exhaustResonanceHz: 156, exhaustBodyGain: 0.78,
-      saturation: 1.5, maxExhaustHz: 1180,
+      saturation: 1.95, maxExhaustHz: 4500,
     },
     visual: {
       paint: 0xc92c23, bodyWidth: 1.98, bodyLength: 4.7, bodyHeight: 0.5,
@@ -203,7 +203,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     audio: {
       cylinders: 10, induction: 'naturally-aspirated', pulseWidth: 0.105,
       exhaustResonanceHz: 148, exhaustBodyGain: 0.87,
-      saturation: 1.75, maxExhaustHz: 1080,
+      saturation: 2.2, maxExhaustHz: 4100,
     },
     visual: {
       paint: 0xd6a91f, bodyWidth: 1.9, bodyLength: 4.3, bodyHeight: 0.58,
@@ -239,7 +239,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     audio: {
       cylinders: 12, induction: 'naturally-aspirated', pulseWidth: 0.16,
       exhaustResonanceHz: 105, exhaustBodyGain: 1.08,
-      saturation: 2.4, maxExhaustHz: 780,
+      saturation: 2.8, maxExhaustHz: 3200,
     },
     visual: {
       paint: 0xb84d24, bodyWidth: 2.02, bodyLength: 4.62, bodyHeight: 0.62,
@@ -275,7 +275,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     audio: {
       cylinders: 12, induction: 'naturally-aspirated', pulseWidth: 0.095,
       exhaustResonanceHz: 160, exhaustBodyGain: 0.84,
-      saturation: 1.85, maxExhaustHz: 1220,
+      saturation: 2.25, maxExhaustHz: 4600,
     },
     visual: {
       paint: 0xe36c24, bodyWidth: 2.03, bodyLength: 4.78, bodyHeight: 0.54,
@@ -311,7 +311,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
     audio: {
       cylinders: 8, induction: 'twin-turbo', pulseWidth: 0.125,
       exhaustResonanceHz: 132, exhaustBodyGain: 0.99,
-      saturation: 2.1, maxExhaustHz: 1080,
+      saturation: 2.55, maxExhaustHz: 4200,
     },
     visual: {
       paint: 0x254e43, bodyWidth: 1.96, bodyLength: 4.74, bodyHeight: 0.51,
