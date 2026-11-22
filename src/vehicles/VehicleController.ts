@@ -269,6 +269,23 @@ export class VehicleController {
     };
   }
 
+  /**
+   * Move the dynamic chassis into a nearby local coordinate frame without
+   * changing velocity, gear, or accumulated odometer distance.
+   */
+  rebase(delta: THREE.Vector3): void {
+    if (delta.lengthSq() === 0) return;
+    const position = this.body.translation();
+    this.body.setTranslation({
+      x: position.x - delta.x,
+      y: position.y - delta.y,
+      z: position.z - delta.z,
+    }, true);
+    this.lastDistanceX -= delta.x;
+    this.lastDistanceZ -= delta.z;
+    this.visual.position.sub(delta);
+  }
+
   syncVisual(): void {
     const p = this.body.translation();
     const q = this.body.rotation();

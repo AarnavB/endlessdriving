@@ -26,6 +26,7 @@ export class Game {
   private physicsAccumulator = 0;
   private latestTelemetry: VehicleTelemetry | null = null;
   private readonly roadPath = new RoadPath(20261122);
+  private readonly worldOffset = new THREE.Vector3();
   private worldScene!: RoadChunkManager;
   private physics!: RAPIER.World;
   private vehicle!: VehicleController;
@@ -147,9 +148,26 @@ export class Game {
   }
 
   private getSpawnPosition(): THREE.Vector3 {
-    const position = this.roadPath.getLanePositionAtWorldZ(-70, -1.8);
+    const position = this.roadPath.getLanePositionAtWorldZ(-70, -1.8).sub(this.worldOffset);
     position.y += 0.72;
     return position;
+  }
+
+  /**
+   * Rebase at a 2.5 km local radius. Total distance is accumulated by the
+   * vehicle controller, while path/chunk indices continue in global distance.
+   */
+  private maybeRebaseWorld(): boolean {
+    const position = this.vehicle.getPosition();
+    if (Math.max(Math.abs(position.x), Math.abs(position.z)) < 2500) return false;
+
+    const delta = new THREE.Vector3(position.x, 0, position.z);
+    this.vehicle.rebase(delta);
+    this.traffic.rebase(delta);
+    this.worldScene.rebase(delta);
+    this.worldOffset.add(delta);
+    this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
+    return true;
   }
 
   private toggleTransmission(): void {
@@ -174,7 +192,7 @@ export class Game {
       this.physics,
       this.scene,
       this.roadPath,
-      this.roadPath.getDistanceAtWorldZ(spawnPosition.z),
+      this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z),
     );
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.latestTelemetry = this.vehicle.getTelemetry();
@@ -231,6 +249,7 @@ export class Game {
 
       // Read position and velocity only after Rapier has integrated the body.
       this.latestTelemetry = this.vehicle.getTelemetry();
+      if (this.maybeRebaseWorld()) this.latestTelemetry = this.vehicle.getTelemetry();
       this.worldScene.update(this.vehicle.getPosition(this.trafficPlayerPosition));
       this.physicsAccumulator -= this.fixedTimeStep;
       steps++;
@@ -280,7 +299,7 @@ export class Game {
     const spawnPosition = this.getSpawnPosition();
     this.vehicle.reset(spawnPosition, true);
     this.worldScene.reset(spawnPosition);
-    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z));
+    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.resetSessionProgress();
@@ -311,10 +330,10 @@ export class Game {
 
   private resetVehicle(): void {
     const position = this.vehicle.getPosition();
-    position.y = this.worldScene.sampleAtWorldZ(position.z).position.y + 0.72;
+    position.y = this.worldScene.sampleAtWorldZ(position.z + this.worldOffset.z).position.y + 0.72;
     this.vehicle.reset(position);
     this.worldScene.reset(position);
-    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(position.z));
+    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(position.z + this.worldOffset.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
   }
@@ -323,7 +342,7 @@ export class Game {
     const spawnPosition = this.getSpawnPosition();
     this.vehicle.reset(spawnPosition, true);
     this.worldScene.reset(spawnPosition);
-    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z));
+    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z));
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.resetSessionProgress();

@@ -19,6 +19,7 @@ interface TrafficVehicle {
  */
 export class TrafficSystem {
   private readonly vehicles: TrafficVehicle[] = [];
+  private readonly originOffset = new THREE.Vector3();
   private readonly nextPosition = { x: 0, y: 0.49, z: 0 };
   private readonly chassisGeometry = new THREE.BoxGeometry(1.72, 0.52, 3.55);
   private readonly roofGeometry = new THREE.BoxGeometry(1.38, 0.52, 1.82);
@@ -58,7 +59,7 @@ export class TrafficSystem {
 
   update(dt: number, playerPosition: THREE.Vector3): void {
     const safeDt = Math.max(0, Math.min(dt, 1 / 30));
-    const playerDistance = this.path.getDistanceAtWorldZ(playerPosition.z);
+    const playerDistance = this.path.getDistanceAtWorldZ(playerPosition.z + this.originOffset.z);
 
     for (const vehicle of this.vehicles) {
       vehicle.distance += vehicle.direction * vehicle.speed * safeDt;
@@ -70,7 +71,7 @@ export class TrafficSystem {
       }
 
       const sample = this.path.sample(vehicle.distance);
-      const position = sample.position.clone().addScaledVector(sample.right, vehicle.laneOffset);
+      const position = sample.position.clone().addScaledVector(sample.right, vehicle.laneOffset).sub(this.originOffset);
       this.nextPosition.x = position.x;
       this.nextPosition.y = position.y + 0.49;
       this.nextPosition.z = position.z;
@@ -93,7 +94,7 @@ export class TrafficSystem {
     for (const vehicle of this.vehicles) {
       vehicle.distance = playerDistance + 105 + vehicle.sequence * 48;
       const sample = this.path.sample(vehicle.distance);
-      const position = sample.position.clone().addScaledVector(sample.right, vehicle.laneOffset);
+      const position = sample.position.clone().addScaledVector(sample.right, vehicle.laneOffset).sub(this.originOffset);
       const yaw = Math.atan2(sample.tangent.x, sample.tangent.z)
         + (vehicle.direction < 0 ? Math.PI : 0);
       const halfYaw = yaw / 2;
@@ -106,6 +107,21 @@ export class TrafficSystem {
       vehicle.body.setRotation(rotation, true);
       vehicle.visual.position.set(position.x, position.y + 0.49, position.z);
       vehicle.visual.rotation.y = yaw;
+    }
+  }
+
+  /** Keep the pooled traffic bodies near the physics origin on long drives. */
+  rebase(delta: THREE.Vector3): void {
+    if (delta.lengthSq() === 0) return;
+    this.originOffset.add(delta);
+    for (const vehicle of this.vehicles) {
+      const position = vehicle.body.translation();
+      vehicle.body.setTranslation({
+        x: position.x - delta.x,
+        y: position.y - delta.y,
+        z: position.z - delta.z,
+      }, true);
+      vehicle.visual.position.sub(delta);
     }
   }
 
@@ -144,7 +160,7 @@ export class TrafficSystem {
         : (sequence % 2 === 0 ? ROAD_LANE_OFFSETS[2] : ROAD_LANE_OFFSETS[3]);
       const distance = startDistance + 105 + sequence * 48;
       const sample = this.path.sample(distance);
-      const position = sample.position.clone().addScaledVector(sample.right, laneOffset);
+      const position = sample.position.clone().addScaledVector(sample.right, laneOffset).sub(this.originOffset);
       const yaw = Math.atan2(sample.tangent.x, sample.tangent.z)
         + (direction < 0 ? Math.PI : 0);
       const halfYaw = yaw / 2;

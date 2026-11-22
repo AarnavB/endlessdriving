@@ -125,6 +125,7 @@ export class RoadChunkManager {
   private readonly buildingMaterials: Record<EnvironmentKind, THREE.MeshStandardMaterial>;
   private readonly asphaltTexture: THREE.CanvasTexture;
   private disposed = false;
+  private readonly originOffset = new THREE.Vector3();
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -167,7 +168,7 @@ export class RoadChunkManager {
   /** Ensure the rolling active window exists around the vehicle (forward or reverse). */
   update(playerPosition: THREE.Vector3): void {
     if (this.disposed) return;
-    const currentIndex = this.path.getChunkIndexAtWorldZ(playerPosition.z);
+    const currentIndex = this.path.getChunkIndexAtWorldZ(playerPosition.z + this.originOffset.z);
     const minimum = currentIndex - this.behindChunks;
     const maximum = currentIndex + this.aheadChunks;
 
@@ -186,8 +187,11 @@ export class RoadChunkManager {
     this.update(playerPosition);
   }
 
+  /** Sample the global road path and return the current rebased local position. */
   sampleAtWorldZ(worldZ: number): RoadSample {
-    return this.path.sampleAtWorldZ(worldZ);
+    const sample = this.path.sampleAtWorldZ(worldZ);
+    sample.position.sub(this.originOffset);
+    return sample;
   }
 
   getLanePositionAtWorldZ(
@@ -195,7 +199,26 @@ export class RoadChunkManager {
     laneOffset: number,
     target = new THREE.Vector3(),
   ): THREE.Vector3 {
-    return this.path.getLanePositionAtWorldZ(worldZ, laneOffset, target);
+    return this.path.getLanePositionAtWorldZ(worldZ, laneOffset, target).sub(this.originOffset);
+  }
+
+  /**
+   * Shift all active road visuals and Rapier bodies by the same local-space
+   * delta. Geometry remains in stable global coordinates and can be rebuilt
+   * from the path plus originOffset without changing chunk identity.
+   */
+  rebase(delta: THREE.Vector3): void {
+    if (this.disposed || delta.lengthSq() === 0) return;
+    this.originOffset.add(delta);
+    for (const chunk of this.chunks.values()) {
+      chunk.group.position.sub(delta);
+      const position = chunk.rigidBody.translation();
+      chunk.rigidBody.setTranslation({
+        x: position.x - delta.x,
+        y: position.y - delta.y,
+        z: position.z - delta.z,
+      }, true);
+    }
   }
 
   setNightBlend(amount: number): void {
@@ -295,34 +318,42 @@ export class RoadChunkManager {
   private createChunk(index: number): RoadChunk {
     const group = new THREE.Group();
     group.name = 'road-chunk-' + index;
+    const anchor = this.path.sample(index * ROAD_CHUNK_LENGTH).position;
+    group.position.copy(anchor).sub(this.originOffset);
     const ownedGeometries: THREE.BufferGeometry[] = [];
     const transition = getEnvironmentTransition(this.path.seed, index);
     const terrainColor = new THREE.Color(transition.primary.terrainColor)
       .lerp(new THREE.Color(transition.secondary.terrainColor), transition.blend);
 
-    const roadData = this.buildRoadGeometry(index);
+    const roadData = this.buildRoadGeometry(index, anchor);
     ownedGeometries.push(roadData.geometry);
     const road = new THREE.Mesh(roadData.geometry, this.roadMaterial);
     road.receiveShadow = true;
     road.frustumCulled = true;
     group.add(road);
 
-    const terrainGeometry = this.buildTerrainGeometry(index, terrainColor);
+    const terrainGeometry = this.buildTerrainGeometry(index, terrainColor, anchor);
     ownedGeometries.push(terrainGeometry);
     const terrain = new THREE.Mesh(terrainGeometry, this.terrainMaterial);
     terrain.receiveShadow = true;
     terrain.frustumCulled = true;
     group.add(terrain);
 
-    const rigidBody = this.physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    const rigidBody = this.physics.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(
+        group.position.x,
+        group.position.y,
+        group.position.z,
+      ),
+    );
     const roadCollider = RAPIER.ColliderDesc.trimesh(roadData.positions, roadData.indices)
       .setFriction(0.08)
       .setRestitution(0);
     this.physics.createCollider(roadCollider, rigidBody);
 
-    this.addRoadMarkings(group, index, ownedGeometries);
-    this.addGuardrails(group, index, rigidBody);
-    this.addScenery(group, index, transition);
+    this.addRoadMarkings(group, index, ownedGeometries, anchor);
+    this.addGuardrails(group, index, rigidBody, anchor);
+    this.addScenery(group, index, transition, anchor);
 
     this.scene.add(group);
     return {
@@ -334,7 +365,7 @@ export class RoadChunkManager {
     };
   }
 
-  private buildRoadGeometry(index: number): RoadGeometryData {
+  private buildRoadGeometry(index: number, anchor: THREE.Vector3): RoadGeometryData {
     const vertexCount = (ROAD_SEGMENTS + 1) * 2;
     const positions = new Float32Array(vertexCount * 3);
     const colors = new Float32Array(vertexCount * 3);
@@ -351,6 +382,8 @@ export class RoadChunkManager {
       const right = sample.position.clone().addScaledVector(sample.right, ROAD_HALF_WIDTH);
       left.y += 0.025;
       right.y += 0.025;
+      left.sub(anchor);
+      right.sub(anchor);
 
       for (let side = 0; side < 2; side++) {
         const vertex = station * 2 + side;
@@ -389,7 +422,7 @@ export class RoadChunkManager {
     return { geometry, positions, indices };
   }
 
-  private buildTerrainGeometry(index: number, baseColor: THREE.Color): THREE.BufferGeometry {
+  private buildTerrainGeometry(index: number, baseColor: THREE.Color, anchor: THREE.Vector3): THREE.BufferGeometry {
     const columns = TERRAIN_OFFSETS.length;
     const rows = ROAD_SEGMENTS + 1;
     const positions = new Float32Array(columns * rows * 3);
@@ -404,6 +437,7 @@ export class RoadChunkManager {
         const offset = TERRAIN_OFFSETS[column];
         const point = sample.position.clone().addScaledVector(sample.right, offset);
         point.y = terrainHeight(sample, offset, distance);
+        point.sub(anchor);
         const vertex = row * columns + column;
         positions[vertex * 3] = point.x;
         positions[vertex * 3 + 1] = point.y;
@@ -444,6 +478,7 @@ export class RoadChunkManager {
     group: THREE.Group,
     index: number,
     ownedGeometries: THREE.BufferGeometry[],
+    anchor: THREE.Vector3,
   ): void {
     const start = index * ROAD_CHUNK_LENGTH;
     const laneDashes = new THREE.InstancedMesh(
@@ -458,7 +493,7 @@ export class RoadChunkManager {
       const sample = this.path.sample(distance);
       const yaw = yawFromTangent(sample.tangent);
       for (const laneDividerOffset of [-3.6, 3.6]) {
-        const position = sample.position.clone().addScaledVector(sample.right, laneDividerOffset);
+        const position = sample.position.clone().addScaledVector(sample.right, laneDividerOffset).sub(anchor);
         position.y += 0.052;
         const matrix = makeTransform(position, yaw, new THREE.Vector3(0.12, 0.025, LANE_DASH_LENGTH));
         laneDashes.setMatrixAt(dashIndex++, matrix);
@@ -470,12 +505,12 @@ export class RoadChunkManager {
     group.add(laneDashes);
 
     for (const offset of [-7.2, 7.2]) {
-      const edge = this.buildRibbon(start, offset, 0.13, ROAD_SEGMENTS, 0.052);
+      const edge = this.buildRibbon(start, offset, 0.13, ROAD_SEGMENTS, 0.052, anchor);
       ownedGeometries.push(edge);
       group.add(new THREE.Mesh(edge, this.roadMarkingWhite));
     }
     for (const offset of [-0.22, 0.22]) {
-      const centre = this.buildRibbon(start, offset, 0.12, ROAD_SEGMENTS, 0.055);
+      const centre = this.buildRibbon(start, offset, 0.12, ROAD_SEGMENTS, 0.055, anchor);
       ownedGeometries.push(centre);
       group.add(new THREE.Mesh(centre, this.roadMarkingYellow));
     }
@@ -487,6 +522,7 @@ export class RoadChunkManager {
     width: number,
     segments: number,
     height: number,
+    anchor: THREE.Vector3,
   ): THREE.BufferGeometry {
     const positions = new Float32Array((segments + 1) * 2 * 3);
     const indices = new Uint32Array(segments * 6);
@@ -497,6 +533,7 @@ export class RoadChunkManager {
         const offset = lateralOffset + (side === 0 ? -width / 2 : width / 2);
         const point = sample.position.clone().addScaledVector(sample.right, offset);
         point.y += height;
+        point.sub(anchor);
         const vertex = station * 2 + side;
         positions[vertex * 3] = point.x;
         positions[vertex * 3 + 1] = point.y;
@@ -524,6 +561,7 @@ export class RoadChunkManager {
     group: THREE.Group,
     index: number,
     rigidBody: RAPIER.RigidBody,
+    anchor: THREE.Vector3,
   ): void {
     const start = index * ROAD_CHUNK_LENGTH;
     const segmentCount = Math.ceil(ROAD_CHUNK_LENGTH / RAIL_SEGMENT_LENGTH);
@@ -537,7 +575,7 @@ export class RoadChunkManager {
       const sample = this.path.sample(distance);
       const yaw = yawFromTangent(sample.tangent);
       for (const side of [-1, 1]) {
-        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET);
+        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET).sub(anchor);
         position.y += 0.78;
         beamMesh.setMatrixAt(
           beamIndex++,
@@ -550,7 +588,7 @@ export class RoadChunkManager {
       const distance = start + Math.min(segment * RAIL_SEGMENT_LENGTH, ROAD_CHUNK_LENGTH);
       const sample = this.path.sample(distance);
       for (const side of [-1, 1]) {
-        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET);
+        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET).sub(anchor);
         position.y += 0.48;
         postMesh.setMatrixAt(
           postIndex++,
@@ -574,7 +612,7 @@ export class RoadChunkManager {
       const yaw = yawFromTangent(sample.tangent);
       const halfLength = RAIL_SEGMENT_LENGTH / 2 + 0.15;
       for (const side of [-1, 1]) {
-        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET);
+        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET).sub(anchor);
         const halfYaw = yaw / 2;
         const rotation = { x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) };
         const collider = RAPIER.ColliderDesc.cuboid(0.12, 0.34, halfLength)
@@ -590,6 +628,7 @@ export class RoadChunkManager {
     group: THREE.Group,
     index: number,
     transition: { primary: EnvironmentProfile; secondary: EnvironmentProfile; blend: number },
+    anchor: THREE.Vector3,
   ): void {
     const rng = new SeededRandom(hashSeed(this.path.seed, index * 0x45d9f3b));
     const start = index * ROAD_CHUNK_LENGTH;
@@ -623,8 +662,8 @@ export class RoadChunkManager {
 
         if (rng.chance(profile.treeChance)) {
           const scale = rng.range(0.72, 1.5);
-          const trunkPosition = new THREE.Vector3(position.x, groundY + 1.55 * scale, position.z);
-          const crownPosition = new THREE.Vector3(position.x, groundY + 3.15 * scale, position.z);
+          const trunkPosition = new THREE.Vector3(position.x, groundY + 1.55 * scale, position.z).sub(anchor);
+          const crownPosition = new THREE.Vector3(position.x, groundY + 3.15 * scale, position.z).sub(anchor);
           const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
           trunkMatrices.push(new THREE.Matrix4().compose(
             trunkPosition,
@@ -640,7 +679,7 @@ export class RoadChunkManager {
 
         if (rng.chance(profile.bushChance)) {
           const scale = rng.range(0.7, 1.5);
-          const bushPosition = new THREE.Vector3(position.x, groundY + 0.52 * scale, position.z);
+          const bushPosition = new THREE.Vector3(position.x, groundY + 0.52 * scale, position.z).sub(anchor);
           bushMatrices[profile.kind].push(new THREE.Matrix4().compose(
             bushPosition,
             new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
@@ -650,7 +689,7 @@ export class RoadChunkManager {
 
         if (rng.chance(profile.rockChance)) {
           const scale = rng.range(0.7, 2.2);
-          const rockPosition = new THREE.Vector3(position.x, groundY + 0.45 * scale, position.z);
+          const rockPosition = new THREE.Vector3(position.x, groundY + 0.45 * scale, position.z).sub(anchor);
           rockMatrices[profile.kind].push(new THREE.Matrix4().compose(
             rockPosition,
             new THREE.Quaternion().setFromEuler(new THREE.Euler(
@@ -666,7 +705,7 @@ export class RoadChunkManager {
           const width = rng.range(9, profile.kind === 'industrial' ? 25 : 18);
           const height = rng.range(7, profile.kind === 'industrial' ? 19 : 15);
           const depth = rng.range(9, 24);
-          const buildingPosition = new THREE.Vector3(position.x, groundY + height / 2, position.z);
+          const buildingPosition = new THREE.Vector3(position.x, groundY + height / 2, position.z).sub(anchor);
           buildingMatrices[profile.kind].push(new THREE.Matrix4().compose(
             buildingPosition,
             new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
@@ -681,12 +720,12 @@ export class RoadChunkManager {
           const distance = start + along + rng.range(-5, 5);
           const sample = this.path.sample(distance);
           const position = sample.position.clone().addScaledVector(sample.right, side * (ROAD_HALF_WIDTH + 3.5));
-          const polePosition = new THREE.Vector3(position.x, position.y + 3.2, position.z);
+          const polePosition = new THREE.Vector3(position.x, position.y + 3.2, position.z).sub(anchor);
           const lampPosition = new THREE.Vector3(
             position.x - side * 0.52,
             position.y + 6.15,
             position.z,
-          );
+          ).sub(anchor);
           poleMatrices.push(makeTransform(
             polePosition,
             yawFromTangent(sample.tangent),
@@ -720,12 +759,12 @@ export class RoadChunkManager {
       const position = sample.position.clone().addScaledVector(sample.right, side * (ROAD_HALF_WIDTH + 4.1));
       const yaw = yawFromTangent(sample.tangent);
       signPostMatrices.push(makeTransform(
-        new THREE.Vector3(position.x, position.y + 2.0, position.z),
+        new THREE.Vector3(position.x, position.y + 2.0, position.z).sub(anchor),
         yaw,
         new THREE.Vector3(1, 4.0, 1),
       ));
       signBoardMatrices.push(makeTransform(
-        new THREE.Vector3(position.x, position.y + 3.35, position.z),
+        new THREE.Vector3(position.x, position.y + 3.35, position.z).sub(anchor),
         yaw,
         new THREE.Vector3(2.6, 1.25, 0.16),
       ));
