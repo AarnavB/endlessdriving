@@ -123,8 +123,8 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [2.77, 1.71, 1.23, 0.96, 0.77], torqueCurve: f40TorqueCurve,
     },
     audio: {
-      cylinders: 8, induction: 'twin-turbo', lowLayer: 0.58, midLayer: 0.32,
-      highLayer: 0.12, filterHz: 1080, turboLayer: 0.42, electricLayer: 0,
+      cylinders: 8, induction: 'twin-turbo', lowLayer: 0.82, midLayer: 0.26,
+      highLayer: 0.035, filterHz: 790, turboLayer: 0.48, electricLayer: 0,
       character: 'classic-v8',
     },
     visual: {
@@ -159,8 +159,8 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.10, 2.18, 1.63, 1.29, 1.03, 0.84, 0.69], torqueCurve: laFerrariTorqueCurve,
     },
     audio: {
-      cylinders: 12, induction: 'hybrid', lowLayer: 0.36, midLayer: 0.44,
-      highLayer: 0.32, filterHz: 1620, turboLayer: 0, electricLayer: 0.13,
+      cylinders: 12, induction: 'hybrid', lowLayer: 0.65, midLayer: 0.38,
+      highLayer: 0.09, filterHz: 1040, turboLayer: 0, electricLayer: 0.055,
       character: 'hybrid-v12',
     },
     visual: {
@@ -195,8 +195,8 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.09, 2.05, 1.52, 1.12, 0.88, 0.71], torqueCurve: gallardoTorqueCurve,
     },
     audio: {
-      cylinders: 10, induction: 'naturally-aspirated', lowLayer: 0.38, midLayer: 0.42,
-      highLayer: 0.3, filterHz: 1450, turboLayer: 0, electricLayer: 0,
+      cylinders: 10, induction: 'naturally-aspirated', lowLayer: 0.66, midLayer: 0.36,
+      highLayer: 0.08, filterHz: 980, turboLayer: 0, electricLayer: 0,
       character: 'v10',
     },
     visual: {
@@ -231,8 +231,8 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.091, 2.105, 1.565, 1.241, 1.065, 0.939], torqueCurve: murcielagoTorqueCurve,
     },
     audio: {
-      cylinders: 12, induction: 'naturally-aspirated', lowLayer: 0.62, midLayer: 0.3,
-      highLayer: 0.12, filterHz: 1120, turboLayer: 0, electricLayer: 0,
+      cylinders: 12, induction: 'naturally-aspirated', lowLayer: 0.88, midLayer: 0.25,
+      highLayer: 0.035, filterHz: 760, turboLayer: 0, electricLayer: 0,
       character: 'deep-v12',
     },
     visual: {
@@ -267,8 +267,8 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [2.92, 1.97, 1.44, 1.10, 0.90, 0.74, 0.62], torqueCurve: aventadorTorqueCurve,
     },
     audio: {
-      cylinders: 12, induction: 'naturally-aspirated', lowLayer: 0.32, midLayer: 0.4,
-      highLayer: 0.36, filterHz: 1760, turboLayer: 0, electricLayer: 0,
+      cylinders: 12, induction: 'naturally-aspirated', lowLayer: 0.7, midLayer: 0.36,
+      highLayer: 0.09, filterHz: 1080, turboLayer: 0, electricLayer: 0,
       character: 'sharp-v12',
     },
     visual: {
@@ -303,8 +303,8 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       gearRatios: [3.98, 2.61, 1.91, 1.48, 1.16, 0.91, 0.69], torqueCurve: sennaTorqueCurve,
     },
     audio: {
-      cylinders: 8, induction: 'twin-turbo', lowLayer: 0.42, midLayer: 0.38,
-      highLayer: 0.2, filterHz: 1320, turboLayer: 0.36, electricLayer: 0,
+      cylinders: 8, induction: 'twin-turbo', lowLayer: 0.76, midLayer: 0.32,
+      highLayer: 0.05, filterHz: 900, turboLayer: 0.42, electricLayer: 0,
       character: 'track-v8',
     },
     visual: {
