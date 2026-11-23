@@ -388,14 +388,9 @@ export class VehicleController {
   /** Read telemetry after world.step() so the HUD reports the current solver result. */
   getTelemetry(): VehicleTelemetry {
     const p = this.body.translation();
-    const q = this.body.rotation();
-    this.scratchQuat.set(q.x, q.y, q.z, q.w);
-    this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
-
     const bodyVelocity = this.body.linvel();
     this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
     this.speedMps = this.velocity.length();
-    const signedSpeed = this.velocity.dot(this.forward);
 
     if (this.hasDistanceSample) {
       const movement = Math.hypot(p.x - this.lastDistanceX, p.z - this.lastDistanceZ);
