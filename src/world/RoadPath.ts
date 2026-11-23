@@ -7,10 +7,10 @@ export const ROAD_HALF_WIDTH = 9;
 export const ROAD_LANE_OFFSETS = [-5.4, -1.8, 1.8, 5.4] as const;
 
 const CONTROL_POINT_SPACING = 360;
-const ROAD_BASE_X = 1.8;
+const ROAD_BASE_X = 0.8;
 const ROAD_BASE_Y = 0;
-const CURVE_AMPLITUDE = 6.5;
-const ELEVATION_AMPLITUDE = 3.2;
+const CURVE_AMPLITUDE = 2.8;
+const ELEVATION_AMPLITUDE = 0.45;
 
 export interface RoadSample {
   position: THREE.Vector3;

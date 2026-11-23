@@ -86,21 +86,6 @@ const createGaugeMarkup = (
     </section>`;
 };
 
-export interface MiniMapPoint {
-  x: number;
-  y: number;
-}
-
-export interface MiniMapRoadGeometry {
-  surface: MiniMapPoint[];
-  leftEdge: MiniMapPoint[];
-  rightEdge: MiniMapPoint[];
-  leftLaneDivider: MiniMapPoint[];
-  rightLaneDivider: MiniMapPoint[];
-  centreLeft: MiniMapPoint[];
-  centreRight: MiniMapPoint[];
-}
-
 export class UIController {
   private settings: GameSettings;
   private onStartCallback: () => void = () => undefined;
@@ -276,10 +261,6 @@ export class UIController {
     this.root.querySelector<HTMLElement>('#hud')?.classList.toggle('hidden', this.activeScreen !== 'game' || !visible);
   }
 
-  setMapVisible(visible: boolean): void {
-    this.root.querySelector<HTMLElement>('#mini-map')?.classList.toggle('hidden', !visible);
-  }
-
   setTransmissionMode(mode: 'AUTO' | 'MANUAL', persist = false): void {
     this.text('#transmission-value', mode);
     const automatic = mode === 'AUTO';
@@ -315,28 +296,6 @@ export class UIController {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* storage may be blocked */ }
     this.root.querySelector<HTMLElement>('#fps-value')?.classList.toggle('hidden', !settings.showFps);
     this.onSettingsCallback(settings);
-  }
-
-  /** Render a heading-up view of the actual generated road near the vehicle. */
-  updateRoadMap(geometry: MiniMapRoadGeometry): void {
-    const toPath = (points: readonly MiniMapPoint[]): string => points
-      .map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-      .join(' ');
-
-    const paths: Array<[string, readonly MiniMapPoint[]]> = [
-      ['#map-road-surface', geometry.surface],
-      ['#map-road-left-edge', geometry.leftEdge],
-      ['#map-road-right-edge', geometry.rightEdge],
-      ['#map-road-lane-left', geometry.leftLaneDivider],
-      ['#map-road-lane-right', geometry.rightLaneDivider],
-      ['#map-road-centre-left', geometry.centreLeft],
-      ['#map-road-centre-right', geometry.centreRight],
-    ];
-
-    for (const [selector, points] of paths) {
-      const element = this.root.querySelector<SVGPathElement>(selector);
-      if (element) element.setAttribute('d', toPath(points));
-    }
   }
 
   updateTelemetry(data: VehicleTelemetry, fps: number, mode: CameraMode, dayPhase: number): void {
@@ -439,10 +398,10 @@ export class UIController {
 
   private render(): void {
     const savedControls = [
-      ['W / ↑', 'Accelerate'], ['S / ↓', 'Brake / reverse'], ['A D / ← →', 'Steer'],
+      ['W / ↑', 'Accelerate'], ['S / ↓', 'Brake; hold at a stop to reverse'], ['A D / ← →', 'Steer'],
       ['SPACE', 'Handbrake'], ['E / Q', 'Shift up / down (manual; Q from 1 selects neutral)'],
       ['GEAR SELECTOR', 'Select neutral or Drive / a forward gear'], ['M', 'Toggle auto / manual'],
-      ['C', 'Change camera'], ['R', 'Reset vehicle'], ['ESC', 'Pause game'], ['H', 'Toggle HUD'], ['N', 'Toggle mini-map'],
+      ['C', 'Change camera'], ['R', 'Reset vehicle'], ['ESC', 'Pause game'], ['H', 'Toggle HUD'],
     ];
     this.root.innerHTML = `
       <div id="hud" class="pointer-events-none absolute inset-0 z-10 text-white hidden">
@@ -457,22 +416,6 @@ export class UIController {
           </div>
           <button id="pause-btn" class="icon-control" aria-label="Pause game">Ⅱ</button>
         </header>
-        <div id="mini-map" class="mini-map pointer-events-auto">
-          <div class="map-label">HIGHWAY MAP <span>LIVE</span></div>
-          <svg viewBox="0 0 170 132" role="img" aria-label="Live heading-up map of the generated highway">
-            <rect width="170" height="132" rx="8" fill="#111922"/>
-            <path id="map-road-surface" d="" fill="none" stroke="#3d4850" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
-            <path id="map-road-left-edge" d="" fill="none" stroke="#aab3b8" stroke-width="1.2"/>
-            <path id="map-road-right-edge" d="" fill="none" stroke="#aab3b8" stroke-width="1.2"/>
-            <path id="map-road-lane-left" d="" fill="none" stroke="#d9e0e1" stroke-width="1" stroke-dasharray="3 4"/>
-            <path id="map-road-lane-right" d="" fill="none" stroke="#d9e0e1" stroke-width="1" stroke-dasharray="3 4"/>
-            <path id="map-road-centre-left" d="" fill="none" stroke="#dfb857" stroke-width="1.3"/>
-            <path id="map-road-centre-right" d="" fill="none" stroke="#dfb857" stroke-width="1.3"/>
-            <circle id="map-player-dot" cx="85" cy="100" r="5.5" fill="#ff8a4c" stroke="#fff0e6" stroke-width="2"/>
-            <path d="M85 89L80 99H90Z" fill="#fff"/>
-          </svg>
-          <div class="map-footer"><span>● YOU</span><span>ROAD / LIVE</span></div>
-        </div>
         <div class="hud-right instrument-cluster pointer-events-auto" aria-label="Vehicle instrument cluster">
           <div class="gauge-pair">
             ${this.renderSpeedGauge(this.settings.speedUnit, getVehicleDefinition(this.selectedVehicleId))}

@@ -29,13 +29,11 @@ interface RoadGeometryData {
 
 const ROAD_SEGMENTS = 30;
 const ROAD_CROSS_SECTIONS = [-ROAD_HALF_WIDTH, -7.35, -7.05, -0.28, 0.28, 7.05, 7.35, ROAD_HALF_WIDTH];
-const TERRAIN_OFFSETS = [-140, -105, -70, -38, -18, -9, 9, 18, 38, 70, 105, 140];
+const TERRAIN_OFFSETS = [-450, -420, -390, -360, -330, -300, -280, -270, -255, -220, -180, -140, -100, -70, -55, -38, -18, -9, 9, 18, 38, 70, 105, 140];
 const LANE_DASH_SPACING = 12;
 const LANE_DASH_LENGTH = 5.2;
-const RAIL_SEGMENT_LENGTH = 8;
-const RAIL_OFFSET = ROAD_HALF_WIDTH + 0.55;
-const MAX_ACTIVE_CHUNKS_BEHIND = 6;
-const MAX_ACTIVE_CHUNKS_AHEAD = 6;
+const MAX_ACTIVE_CHUNKS_BEHIND = 4;
+const MAX_ACTIVE_CHUNKS_AHEAD = 5;
 
 const ENVIRONMENT_KINDS: EnvironmentKind[] = [
   'countryside',
@@ -49,14 +47,16 @@ function yawFromTangent(tangent: THREE.Vector3): number {
   return Math.atan2(tangent.x, tangent.z);
 }
 
-function terrainHeight(sample: RoadSample, offset: number, distance: number, relief = 1): number {
+function terrainHeight(sample: RoadSample, offset: number, distance: number, relief = 0.05): number {
+  // A lower channel gives the Hudson a proper water surface; both banks remain
+  // close to level so the surrounding Manhattan and Fort Lee skyline reads as urban.
+  if (offset <= -55 && offset >= -270) return sample.position.y - 1.5;
   const outsideRoad = Math.max(0, Math.abs(offset) - ROAD_HALF_WIDTH);
-  const broad = Math.sin(distance * 0.0045 + offset * 0.008) * 0.72;
-  const detail = Math.sin(distance * 0.017 - offset * 0.023) * 0.18;
-  // Blend terrain down from the road edge instead of leaving a visible trench.
+  const broad = Math.sin(distance * 0.0045 + offset * 0.008) * 0.12;
+  const detail = Math.sin(distance * 0.017 - offset * 0.023) * 0.035;
   const reliefBlend = Math.min(1, outsideRoad / 28);
-  return sample.position.y + 0.015 - outsideRoad * 0.008
-    + (broad + detail) * reliefBlend * relief;
+  return sample.position.y + 0.015 - outsideRoad * 0.0015
+    + (broad + detail) * reliefBlend * Math.min(relief, 0.12);
 }
 
 function makeTransform(
@@ -84,13 +84,17 @@ export class RoadChunkManager {
     roughness: 1,
     side: THREE.DoubleSide,
   });
+  private readonly hudsonMaterial = new THREE.MeshStandardMaterial({
+    color: 0x245b70, roughness: 0.3, metalness: 0.12, side: THREE.DoubleSide,
+  });
+  private readonly bridgeSteelMaterial = new THREE.MeshStandardMaterial({ color: 0x8a3d36, roughness: 0.58, metalness: 0.66 });
+  private readonly bridgeCableMaterial = new THREE.MeshStandardMaterial({ color: 0x50595e, roughness: 0.42, metalness: 0.78 });
+  private readonly bridgeHangerMaterial = new THREE.LineBasicMaterial({ color: 0x7c858a });
+  private readonly cityStreetMaterial = new THREE.MeshStandardMaterial({ color: 0x292f34, roughness: 0.96 });
+  private readonly citySidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x777c80, roughness: 0.92 });
+  private readonly cityCurbMaterial = new THREE.MeshStandardMaterial({ color: 0x9da1a4, roughness: 0.9 });
   private readonly roadMarkingWhite = new THREE.MeshBasicMaterial({ color: 0xe8e7db });
   private readonly roadMarkingYellow = new THREE.MeshBasicMaterial({ color: 0xe5bd51 });
-  private readonly railMaterial = new THREE.MeshStandardMaterial({
-    color: 0x969b9d,
-    metalness: 0.72,
-    roughness: 0.38,
-  });
   private readonly streetPoleMaterial = new THREE.MeshStandardMaterial({
     color: 0x343b40,
     metalness: 0.68,
@@ -129,6 +133,7 @@ export class RoadChunkManager {
   private readonly rockMaterials: Record<EnvironmentKind, THREE.MeshStandardMaterial>;
   private readonly buildingMaterials: Record<EnvironmentKind, THREE.MeshStandardMaterial>;
   private readonly asphaltTexture: THREE.CanvasTexture;
+  private readonly buildingFacadeTexture: THREE.CanvasTexture;
   private disposed = false;
   private readonly originOffset = new THREE.Vector3();
   private environmentOverride: EnvironmentKind | null = null;
@@ -141,6 +146,7 @@ export class RoadChunkManager {
     private readonly aheadChunks = MAX_ACTIVE_CHUNKS_AHEAD,
   ) {
     this.asphaltTexture = this.createAsphaltTexture();
+    this.buildingFacadeTexture = this.createBuildingFacadeTexture();
     this.roadMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       map: this.asphaltTexture,
@@ -162,7 +168,8 @@ export class RoadChunkManager {
       roughness: 0.94,
     }));
     this.buildingMaterials = this.makeEnvironmentMaterials((kind) => ({
-      color: ENVIRONMENT_PROFILES[kind].buildingColor,
+      color: 0xffffff,
+      map: this.buildingFacadeTexture,
       roughness: 0.84,
       metalness: kind === 'industrial' ? 0.16 : 0.04,
     }));
@@ -274,11 +281,18 @@ export class RoadChunkManager {
     this.chunks.clear();
 
     this.asphaltTexture.dispose();
+    this.buildingFacadeTexture.dispose();
     this.roadMaterial.dispose();
+    this.hudsonMaterial.dispose();
+    this.bridgeSteelMaterial.dispose();
+    this.bridgeCableMaterial.dispose();
+    this.bridgeHangerMaterial.dispose();
+    this.cityStreetMaterial.dispose();
+    this.citySidewalkMaterial.dispose();
+    this.cityCurbMaterial.dispose();
     this.terrainMaterial.dispose();
     this.roadMarkingWhite.dispose();
     this.roadMarkingYellow.dispose();
-    this.railMaterial.dispose();
     this.streetPoleMaterial.dispose();
     this.streetLampMaterial.dispose();
     this.signPostMaterial.dispose();
@@ -359,12 +373,19 @@ export class RoadChunkManager {
     road.frustumCulled = true;
     group.add(road);
 
-    const terrainGeometry = this.buildTerrainGeometry(index, transition, anchor);
-    ownedGeometries.push(terrainGeometry);
-    const terrain = new THREE.Mesh(terrainGeometry, this.terrainMaterial);
+    const terrainData = this.buildTerrainGeometry(index, transition, anchor);
+    ownedGeometries.push(terrainData.geometry);
+    const terrain = new THREE.Mesh(terrainData.geometry, this.terrainMaterial);
     terrain.receiveShadow = true;
     terrain.frustumCulled = true;
     group.add(terrain);
+
+    const hudsonGeometry = this.buildHudsonRiverGeometry(index, anchor);
+    ownedGeometries.push(hudsonGeometry);
+    const hudson = new THREE.Mesh(hudsonGeometry, this.hudsonMaterial);
+    hudson.receiveShadow = false;
+    hudson.frustumCulled = true;
+    group.add(hudson);
 
     const rigidBody = this.physics.createRigidBody(
       RAPIER.RigidBodyDesc.fixed().setTranslation(
@@ -379,13 +400,27 @@ export class RoadChunkManager {
       roadData.indices,
       RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
     )
-      .setFriction(0.08)
+      .setFriction(1.05)
       .setRestitution(0);
     this.physics.createCollider(roadCollider, rigidBody);
 
+    // The terrain was previously visual-only. Give the exact generated surface
+    // a matching fixed trimesh collider so vehicles can leave the asphalt,
+    // traverse shoulders and recover onto the road without falling through.
+    const terrainCollider = RAPIER.ColliderDesc.trimesh(
+      terrainData.positions,
+      terrainData.indices,
+      RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
+    )
+      .setFriction(0.95)
+      .setRestitution(0);
+    this.physics.createCollider(terrainCollider, rigidBody);
+
     this.addRoadMarkings(group, index, ownedGeometries, anchor);
-    this.addGuardrails(group, index, rigidBody, anchor);
+    this.addUrbanRoadside(group, index, rigidBody, ownedGeometries, anchor);
     this.addScenery(group, index, transition, anchor);
+    this.addCityCrossStreets(group, index, anchor);
+    this.addGeorgeWashingtonBridge(group, index, anchor, ownedGeometries);
 
     this.scene.add(group);
     return {
@@ -466,7 +501,7 @@ export class RoadChunkManager {
     return { geometry, positions, indices };
   }
 
-  private buildTerrainGeometry(index: number, transition: { primary: EnvironmentProfile; secondary: EnvironmentProfile; blend: number }, anchor: THREE.Vector3): THREE.BufferGeometry {
+  private buildTerrainGeometry(index: number, transition: { primary: EnvironmentProfile; secondary: EnvironmentProfile; blend: number }, anchor: THREE.Vector3): RoadGeometryData {
     const columns = TERRAIN_OFFSETS.length;
     const rows = ROAD_SEGMENTS + 1;
     const positions = new Float32Array(columns * rows * 3);
@@ -522,7 +557,7 @@ export class RoadChunkManager {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
-    return geometry;
+    return { geometry, positions, indices };
   }
 
   private addRoadMarkings(
@@ -608,71 +643,55 @@ export class RoadChunkManager {
     return geometry;
   }
 
-  private addGuardrails(
+  private addUrbanRoadside(
     group: THREE.Group,
     index: number,
     rigidBody: RAPIER.RigidBody,
+    ownedGeometries: THREE.BufferGeometry[],
     anchor: THREE.Vector3,
   ): void {
     const start = index * ROAD_CHUNK_LENGTH;
-    const segmentCount = Math.ceil(ROAD_CHUNK_LENGTH / RAIL_SEGMENT_LENGTH);
-    const beamMesh = new THREE.InstancedMesh(this.unitBox, this.railMaterial, segmentCount * 2);
-    const postMesh = new THREE.InstancedMesh(this.postGeometry, this.railMaterial, (segmentCount + 1) * 2);
-    let beamIndex = 0;
-    let postIndex = 0;
+    const curbStep = 3;
+    const curbSegmentLength = ROAD_CHUNK_LENGTH * curbStep / ROAD_SEGMENTS;
+    const curbCountPerSide = Math.ceil(ROAD_SEGMENTS / curbStep);
+    const curbs = new THREE.InstancedMesh(this.unitBox, this.cityCurbMaterial, curbCountPerSide * 2);
+    curbs.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    let curbIndex = 0;
+    for (const side of [-1, 1]) {
+      const sidewalkGeometry = this.buildRibbon(
+        start, side * (ROAD_HALF_WIDTH + 1.9), 3.6, ROAD_SEGMENTS, 0.075, anchor,
+      );
+      ownedGeometries.push(sidewalkGeometry);
+      const sidewalk = new THREE.Mesh(sidewalkGeometry, this.citySidewalkMaterial);
+      sidewalk.receiveShadow = true;
+      group.add(sidewalk);
 
-    for (let segment = 0; segment < segmentCount; segment++) {
-      const distance = start + (segment + 0.5) * RAIL_SEGMENT_LENGTH;
-      const sample = this.path.sample(distance);
-      const yaw = yawFromTangent(sample.tangent);
-      for (const side of [-1, 1]) {
-        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET).sub(anchor);
-        position.y += 0.78;
-        beamMesh.setMatrixAt(
-          beamIndex++,
-          makeTransform(position, yaw, new THREE.Vector3(0.16, 0.34, RAIL_SEGMENT_LENGTH + 0.16)),
-        );
-      }
-    }
+      for (let station = curbStep / 2; station < ROAD_SEGMENTS; station += curbStep) {
+        const distance = start + (station / ROAD_SEGMENTS) * ROAD_CHUNK_LENGTH;
+        const sample = this.path.sample(distance);
+        const yaw = yawFromTangent(sample.tangent);
+        const position = sample.position.clone()
+          .addScaledVector(sample.right, side * (ROAD_HALF_WIDTH + 0.1))
+          .sub(anchor);
+        position.y += 0.13;
+        curbs.setMatrixAt(curbIndex++, makeTransform(
+          position, yaw, new THREE.Vector3(0.24, 0.22, curbSegmentLength + 0.2),
+        ));
 
-    for (let segment = 0; segment <= segmentCount; segment += 1) {
-      const distance = start + Math.min(segment * RAIL_SEGMENT_LENGTH, ROAD_CHUNK_LENGTH);
-      const sample = this.path.sample(distance);
-      for (const side of [-1, 1]) {
-        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET).sub(anchor);
-        position.y += 0.48;
-        postMesh.setMatrixAt(
-          postIndex++,
-          makeTransform(position, yawFromTangent(sample.tangent), new THREE.Vector3(0.13, 0.95, 0.13)),
-        );
-      }
-    }
-
-    beamMesh.instanceMatrix.needsUpdate = true;
-    postMesh.count = postIndex;
-    postMesh.instanceMatrix.needsUpdate = true;
-    beamMesh.computeBoundingSphere();
-    postMesh.computeBoundingSphere();
-    group.add(beamMesh, postMesh);
-
-    // One fixed body per chunk owns its road mesh and all short barrier boxes.
-    // Removing that body releases every road/barrier collider in one operation.
-    for (let segment = 0; segment < segmentCount; segment += 1) {
-      const distance = start + (segment + 0.5) * RAIL_SEGMENT_LENGTH;
-      const sample = this.path.sample(distance);
-      const yaw = yawFromTangent(sample.tangent);
-      const halfLength = RAIL_SEGMENT_LENGTH / 2 + 0.15;
-      for (const side of [-1, 1]) {
-        const position = sample.position.clone().addScaledVector(sample.right, side * RAIL_OFFSET).sub(anchor);
         const halfYaw = yaw / 2;
-        const rotation = { x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) };
-        const collider = RAPIER.ColliderDesc.cuboid(0.12, 0.34, halfLength)
-          .setTranslation(position.x, position.y + 0.78, position.z)
-          .setRotation(rotation)
-          .setFriction(0.35);
-        this.physics.createCollider(collider, rigidBody);
+        this.physics.createCollider(
+          RAPIER.ColliderDesc.cuboid(0.12, 0.11, curbSegmentLength / 2 + 0.1)
+            .setTranslation(position.x, position.y, position.z)
+            .setRotation({ x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) })
+            .setFriction(0.52),
+          rigidBody,
+        );
       }
     }
+    curbs.count = curbIndex;
+    curbs.instanceMatrix.needsUpdate = true;
+    curbs.computeBoundingSphere();
+    group.add(curbs);
   }
 
   private addScenery(
@@ -705,7 +724,7 @@ export class RoadChunkManager {
       for (let item = 0; item < 7; item++) {
         const distance = start + rng.range(7, ROAD_CHUNK_LENGTH - 7);
         const sample = this.path.sample(distance);
-        const offset = rng.range(14, 58);
+        const offset = side > 0 ? rng.range(23, 132) : rng.range(292, 420);
         const position = sample.position.clone().addScaledVector(sample.right, side * offset);
         const profile = selectEnvironmentForFeature(transition, rng);
         const groundY = terrainHeight(sample, side * offset, distance, profile.terrainRelief);
@@ -755,9 +774,9 @@ export class RoadChunkManager {
         }
 
         if (rng.chance(profile.buildingChance)) {
-          const width = rng.range(9, profile.kind === 'industrial' ? 25 : 18);
-          const height = rng.range(7, profile.kind === 'industrial' ? 19 : 15);
-          const depth = rng.range(9, 24);
+          const width = rng.range(18, 42);
+          const height = rng.range(32, profile.kind === 'industrial' ? 190 : 145);
+          const depth = rng.range(18, 46);
           const buildingPosition = new THREE.Vector3(position.x, groundY + height / 2, position.z).sub(anchor);
           buildingMatrices[profile.kind].push(new THREE.Matrix4().compose(
             buildingPosition,
@@ -829,6 +848,169 @@ export class RoadChunkManager {
     }
     this.addInstanced(group, this.postGeometry, this.signPostMaterial, signPostMatrices);
     this.addInstanced(group, this.unitBox, this.signBoardMaterial, signBoardMatrices);
+  }
+
+  private createBuildingFacadeTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas 2D context unavailable for NYC facade texture.');
+    context.fillStyle = '#343d46';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    for (let row = 8; row < 500; row += 22) {
+      context.fillStyle = 'rgba(12,20,27,0.42)';
+      context.fillRect(0, row - 3, 256, 3);
+      for (let col = 8; col < 250; col += 18) {
+        const warm = ((row * 13 + col * 7) % 11) < 4;
+        const lit = ((row * 3 + col * 5) % 7) !== 0;
+        context.fillStyle = lit
+          ? (warm ? 'rgba(245,196,116,0.92)' : 'rgba(147,190,210,0.82)')
+          : 'rgba(11,23,33,0.94)';
+        context.fillRect(col, row, 10, 14);
+        context.fillStyle = 'rgba(255,255,255,0.16)';
+        context.fillRect(col, row, 10, 1);
+      }
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1.3, 2.1);
+    texture.anisotropy = 2;
+    return texture;
+  }
+
+  private addCityCrossStreets(group: THREE.Group, index: number, anchor: THREE.Vector3): void {
+    const roads = new THREE.InstancedMesh(this.unitBox, this.cityStreetMaterial, 4);
+    const sidewalks = new THREE.InstancedMesh(this.unitBox, this.citySidewalkMaterial, 8);
+    roads.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    sidewalks.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    const start = index * ROAD_CHUNK_LENGTH;
+    let roadIndex = 0;
+    let sidewalkIndex = 0;
+    for (const along of [30, 90]) {
+      const sample = this.path.sample(start + along);
+      const yaw = yawFromTangent(sample.tangent);
+      for (const bank of [1, -1]) {
+        const centreOffset = bank > 0 ? 76 : -360;
+        const base = sample.position.clone().addScaledVector(sample.right, centreOffset).sub(anchor);
+        roads.setMatrixAt(roadIndex++, makeTransform(
+          new THREE.Vector3(base.x, sample.position.y + 0.025, base.z),
+          yaw,
+          new THREE.Vector3(108, 0.12, 11),
+        ));
+        for (const side of [-1, 1]) {
+          const p = sample.position.clone()
+            .addScaledVector(sample.right, centreOffset)
+            .addScaledVector(sample.tangent, side * 7.0)
+            .sub(anchor);
+          sidewalks.setMatrixAt(sidewalkIndex++, makeTransform(
+            new THREE.Vector3(p.x, sample.position.y + 0.12, p.z),
+            yaw,
+            new THREE.Vector3(108, 0.2, 2.2),
+          ));
+        }
+      }
+    }
+    roads.instanceMatrix.needsUpdate = true;
+    sidewalks.instanceMatrix.needsUpdate = true;
+    roads.computeBoundingSphere();
+    sidewalks.computeBoundingSphere();
+    group.add(roads, sidewalks);
+  }
+
+  private buildHudsonRiverGeometry(index: number, anchor: THREE.Vector3): THREE.BufferGeometry {
+    const rows = ROAD_SEGMENTS + 1;
+    const positions = new Float32Array(rows * 2 * 3);
+    const indices = new Uint32Array(ROAD_SEGMENTS * 6);
+    const startDistance = index * ROAD_CHUNK_LENGTH;
+    const banks = [-270, -55];
+    for (let row = 0; row < rows; row++) {
+      const distance = startDistance + (row / ROAD_SEGMENTS) * ROAD_CHUNK_LENGTH;
+      const sample = this.path.sample(distance);
+      for (let column = 0; column < 2; column++) {
+        const point = sample.position.clone().addScaledVector(sample.right, banks[column]);
+        point.y = sample.position.y - 0.72;
+        point.sub(anchor);
+        const vertex = row * 2 + column;
+        positions[vertex * 3] = point.x;
+        positions[vertex * 3 + 1] = point.y;
+        positions[vertex * 3 + 2] = point.z;
+      }
+      if (row < ROAD_SEGMENTS) {
+        const a = row * 2, b = a + 1, c = a + 2, d = a + 3, cursor = row * 6;
+        indices[cursor] = a; indices[cursor + 1] = c; indices[cursor + 2] = b;
+        indices[cursor + 3] = b; indices[cursor + 4] = c; indices[cursor + 5] = d;
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  private addGeorgeWashingtonBridge(
+    group: THREE.Group,
+    index: number,
+    anchor: THREE.Vector3,
+    ownedGeometries: THREE.BufferGeometry[],
+  ): void {
+    const bridgeDistance = 660;
+    const start = index * ROAD_CHUNK_LENGTH;
+    if (bridgeDistance < start || bridgeDistance >= start + ROAD_CHUNK_LENGTH) return;
+    const sample = this.path.sample(bridgeDistance);
+    const bridge = new THREE.Group();
+    bridge.name = 'George Washington Bridge';
+    bridge.position.copy(sample.position).sub(anchor);
+    group.add(bridge);
+
+    const deckY = 46;
+    const addBox = (size: [number, number, number], position: [number, number, number], material: THREE.Material): void => {
+      const geometry = new THREE.BoxGeometry(...size);
+      ownedGeometries.push(geometry);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(...position);
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      bridge.add(mesh);
+    };
+    addBox([250, 2.2, 22], [-160, deckY, 0], this.bridgeSteelMaterial);
+    addBox([250, 1.1, 0.8], [-160, deckY + 1.6, -11.2], this.bridgeCableMaterial);
+    addBox([250, 1.1, 0.8], [-160, deckY + 1.6, 11.2], this.bridgeCableMaterial);
+    for (const towerX of [-235, -85]) {
+      for (const sideZ of [-10, 10]) {
+        addBox([3.2, 58, 3.2], [towerX, deckY + 29, sideZ], this.bridgeSteelMaterial);
+      }
+      addBox([3.4, 3.2, 24], [towerX, deckY + 55, 0], this.bridgeSteelMaterial);
+      addBox([3.0, 2.4, 20], [towerX, deckY + 28, 0], this.bridgeSteelMaterial);
+    }
+    for (const sideZ of [-10, 10]) {
+      const curve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-286, deckY + 16, sideZ),
+        new THREE.Vector3(-235, deckY + 57, sideZ),
+        new THREE.Vector3(-160, deckY + 48, sideZ),
+        new THREE.Vector3(-85, deckY + 57, sideZ),
+        new THREE.Vector3(-34, deckY + 16, sideZ),
+      ]);
+      const cableGeometry = new THREE.TubeGeometry(curve, 72, 0.42, 8, false);
+      ownedGeometries.push(cableGeometry);
+      bridge.add(new THREE.Mesh(cableGeometry, this.bridgeCableMaterial));
+    }
+    const hangerPositions: number[] = [];
+    for (const sideZ of [-10, 10]) {
+      for (let x = -275; x <= -45; x += 9) {
+        const t = (x + 286) / 252;
+        const sag = 16 + Math.sin(t * Math.PI) * 32;
+        hangerPositions.push(x, deckY + sag, sideZ, x, deckY + 1.5, sideZ);
+      }
+    }
+    const hangerGeometry = new THREE.BufferGeometry();
+    hangerGeometry.setAttribute('position', new THREE.Float32BufferAttribute(hangerPositions, 3));
+    ownedGeometries.push(hangerGeometry);
+    bridge.add(new THREE.LineSegments(hangerGeometry, this.bridgeHangerMaterial));
   }
 
   private addInstanced(

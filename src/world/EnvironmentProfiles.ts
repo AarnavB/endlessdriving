@@ -78,12 +78,12 @@ export const ENVIRONMENT_PROFILES: Record<EnvironmentKind, EnvironmentProfile> =
     bushColor: 0x59664b,
     rockColor: 0x74756f,
     buildingColor: 0x646e75,
-    treeChance: 0.18,
-    bushChance: 0.22,
-    rockChance: 0.3,
-    buildingChance: 0.82,
-    streetlightChance: 0.94,
-    terrainRelief: 0.55,
+    treeChance: 0.025,
+    bushChance: 0.025,
+    rockChance: 0,
+    buildingChance: 0.98,
+    streetlightChance: 0.98,
+    terrainRelief: 0.04,
   },
   mountain: {
     kind: 'mountain',
@@ -101,13 +101,7 @@ export const ENVIRONMENT_PROFILES: Record<EnvironmentKind, EnvironmentProfile> =
   },
 };
 
-const ENVIRONMENT_ORDER: EnvironmentKind[] = [
-  'countryside',
-  'forest',
-  'suburban',
-  'industrial',
-  'mountain',
-];
+const ENVIRONMENT_ORDER: EnvironmentKind[] = ['industrial'];
 const REGION_CHUNKS = 12;
 
 function profileForRegion(seed: number, region: number): EnvironmentProfile {

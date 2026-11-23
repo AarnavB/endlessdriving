@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { InputState, VehicleDebugTelemetry, VehicleTelemetry } from '../types';
-import { createSportsCarVisual } from './vehicleVisual';
+import { createSportsCarVisual, type VehicleWheelVisual } from './vehicleVisual';
 import type { VehicleDefinition } from './VehicleDefinitions';
 
 export type ShiftEventType = 'upshift' | 'downshift' | 'neutral' | 'engage' | 'reverse';
@@ -18,7 +18,9 @@ export interface VehicleShiftEvent {
 export const IDLE_RPM = 850;
 export const MAX_RPM = 8500;
 export const MAX_FORWARD_SPEED = 58;
-const CHASSIS_FRICTION = 0.08;
+const CHASSIS_FRICTION = 0.75;
+const WHEEL_REST_LENGTH = 0.22;
+const WHEEL_CONNECTION_Y = -0.16;
 const ODOMETER_KEY = 'endless-driving-vehicle-odometers-v1';
 
 const NEUTRAL_INPUT: InputState = {
@@ -47,30 +49,32 @@ function writeOdometer(vehicleId: string, distanceKm: number): void {
 export class VehicleController {
   readonly body: RAPIER.RigidBody;
   readonly visual: THREE.Group;
+  private readonly wheelController: RAPIER.DynamicRayCastVehicleController;
   readonly definition: VehicleDefinition;
-  private readonly wheelMeshes: THREE.Mesh[];
+  private readonly wheelMeshes: VehicleWheelVisual[];
   private gear = 1;
   private rpm: number;
   private speedMps = 0;
   private smoothedSteer = 0;
-  private yawVelocity = 0;
   private tripDistanceKm = 0;
   private odometerKm: number;
   private lastPersistedOdometerKm: number;
   private lastDistanceX = 0;
   private lastDistanceZ = 0;
   private hasDistanceSample = false;
-  private lastShiftAt = 0;
+  private simulationTimeMs = 0;
+  private lastShiftAt = -240;
   private lastAppliedForwardForce = 0;
   private lastInput: InputState = { ...NEUTRAL_INPUT };
   private readonly shiftEvents: VehicleShiftEvent[] = [];
   private readonly forward = new THREE.Vector3();
-  private readonly right = new THREE.Vector3();
   private readonly velocity = new THREE.Vector3();
-  private readonly force = new THREE.Vector3();
   private readonly scratchQuat = new THREE.Quaternion();
   private handbrake = false;
   private manualTransmission = false;
+  private driveThrottle = 0;
+  private brakeToReverseTime = 0;
+  private reverseEngaged = false;
   private reverseAudioLatched = false;
 
   constructor(world: RAPIER.World, scene: THREE.Scene, definition: VehicleDefinition) {
@@ -81,8 +85,8 @@ export class VehicleController {
 
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(0, 0.72, 0)
-      .setLinearDamping(0.08)
-      .setAngularDamping(1.1)
+      .setLinearDamping(0.018)
+      .setAngularDamping(0.75)
       .setCanSleep(false)
       .enabledRotations(false, true, false);
     this.body = world.createRigidBody(bodyDesc);
@@ -91,6 +95,31 @@ export class VehicleController {
       .setFriction(CHASSIS_FRICTION)
       .setRestitution(0.015);
     world.createCollider(collider, this.body);
+
+    // One chassis body with four ray-cast tyres and independent suspension.
+    this.wheelController = world.createVehicleController(this.body);
+    this.wheelController.indexUpAxis = 1;
+    this.wheelController.setIndexForwardAxis = 2;
+    let wheelIndex = 0;
+    for (const side of [-1, 1]) {
+      for (const z of [-definition.visual.wheelBase * 0.5, definition.visual.wheelBase * 0.5]) {
+        this.wheelController.addWheel(
+          { x: side * definition.visual.wheelTrack * 0.5, y: WHEEL_CONNECTION_Y, z },
+          { x: 0, y: -1, z: 0 },
+          { x: -1, y: 0, z: 0 },
+          WHEEL_REST_LENGTH,
+          definition.physics.wheelRadiusM,
+        );
+        this.wheelController.setWheelMaxSuspensionTravel(wheelIndex, 0.22);
+        this.wheelController.setWheelSuspensionStiffness(wheelIndex, 18);
+        this.wheelController.setWheelSuspensionCompression(wheelIndex, 2.1);
+        this.wheelController.setWheelSuspensionRelaxation(wheelIndex, 2.5);
+        this.wheelController.setWheelMaxSuspensionForce(wheelIndex, definition.physics.massKg * 9.81 * 0.72);
+        this.wheelController.setWheelFrictionSlip(wheelIndex, 5.5);
+        this.wheelController.setWheelSideFrictionStiffness(wheelIndex, 1.2);
+        wheelIndex++;
+      }
+    }
 
     const visualParts = createSportsCarVisual(definition);
     this.visual = visualParts.root;
@@ -120,129 +149,250 @@ export class VehicleController {
 
   update(dt: number, input: InputState): VehicleTelemetry {
     const safeDt = THREE.MathUtils.clamp(dt, 1 / 240, 1 / 30);
+    this.simulationTimeMs += safeDt * 1000;
     this.lastInput = input;
 
     const q = this.body.rotation();
     this.scratchQuat.set(q.x, q.y, q.z, q.w);
     this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
-    this.right.set(1, 0, 0).applyQuaternion(this.scratchQuat).setY(0).normalize();
 
     const bodyVelocity = this.body.linvel();
     this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
     this.speedMps = this.velocity.length();
-    const signedSpeed = this.velocity.dot(this.forward);
+    let signedSpeed = this.velocity.dot(this.forward);
 
     this.handbrake = input.handbrake;
+    this.driveThrottle = THREE.MathUtils.damp(
+      this.driveThrottle,
+      input.throttle,
+      input.throttle > this.driveThrottle ? 12 : 16,
+      safeDt,
+    );
+    // A slower steering rack response filters abrupt digital keyboard inputs.
+    // Vehicle-specific response remains a small modifier, not a large sensitivity multiplier.
     this.smoothedSteer = THREE.MathUtils.damp(
-      this.smoothedSteer, input.steer, this.definition.physics.steeringResponse * 9, safeDt,
+      this.smoothedSteer,
+      input.steer,
+      this.definition.physics.steeringResponse * 4.5,
+      safeDt,
     );
 
-    let longitudinalForce = 0;
-    const profile = this.definition.physics;
-    const maxSpeedMps = profile.maxSpeedKmh / 3.6;
-    const gearRatio = this.gear === 0 ? 0 : (profile.gearRatios[this.gear - 1] ?? profile.gearRatios[0]);
-    if (this.gear !== 0 && input.throttle > 0 && input.brake === 0) {
-      const targetCoupledRpm = this.calculateCoupledRpm(this.gear, Math.abs(signedSpeed));
-      const torqueFactor = this.getTorqueFactor(targetCoupledRpm);
-      const gearFactor = THREE.MathUtils.clamp(gearRatio / profile.gearRatios[0], 0.3, 1);
-      const speedRatio = THREE.MathUtils.clamp(this.speedMps / maxSpeedMps, 0, 1);
-      const speedFade = 1 - Math.pow(speedRatio, 1.5) * 0.38;
-      const hybridAssist = profile.hybridAssist
-        ? profile.hybridAssist - Math.min(profile.hybridAssist - 1, speedRatio * (profile.hybridAssist - 1))
-        : 1;
-      longitudinalForce = profile.maxDriveForce * input.throttle * torqueFactor
-        * gearFactor * speedFade * hybridAssist;
-    } else if (this.gear !== 0 && input.throttle === 0 && this.speedMps > 1.2) {
-      longitudinalForce = -Math.sign(signedSpeed) * profile.engineBrakeForce;
-    }
-
-    if (input.brake > 0) {
-      if (this.gear === 0) {
-        longitudinalForce = this.speedMps > 0.2
-          ? -Math.sign(signedSpeed) * profile.brakeForce * input.brake
-          : 0;
-      } else if (signedSpeed > 0.55) {
-        longitudinalForce = -profile.brakeForce * input.brake;
-      } else if (signedSpeed < -0.55) {
-        longitudinalForce = profile.brakeForce * input.brake;
-      } else {
-        longitudinalForce = -profile.brakeForce * 0.24 * input.brake;
-      }
-    }
-
-    if (this.speedMps > maxSpeedMps && longitudinalForce > 0) {
-      longitudinalForce *= THREE.MathUtils.clamp(1 - (this.speedMps - maxSpeedMps) / 10, 0, 1);
-    }
-    this.lastAppliedForwardForce = longitudinalForce;
-    this.force.copy(this.forward).multiplyScalar(longitudinalForce);
-
-    const lateralSpeed = this.velocity.dot(this.right);
-    const lateralGrip = this.handbrake ? profile.handbrakeGrip : profile.lateralGrip;
-    this.force.addScaledVector(this.right, -lateralSpeed * lateralGrip);
-    const rollingDrag = 0.95 + this.speedMps * 0.46;
-    this.force.addScaledVector(this.velocity, -rollingDrag);
-    if (this.handbrake && this.speedMps > 0.5) {
-      this.force.addScaledVector(this.velocity, -this.speedMps * 145);
-    }
-
-    this.body.resetForces(true);
-    this.body.addForce({ x: this.force.x, y: 0, z: this.force.z }, true);
-
-    const steeringAuthority = THREE.MathUtils.clamp(this.speedMps / 7.5, 0.22, 1);
-    const direction = Math.abs(signedSpeed) > 0.4 ? Math.sign(signedSpeed) : 1;
-    const targetYawRate = -this.smoothedSteer * (0.12 + steeringAuthority * 1.02)
-      * direction * (this.handbrake ? 1.2 : 1);
-    const yawAlpha = 1 - Math.exp(-7 * safeDt);
-    this.yawVelocity = THREE.MathUtils.lerp(this.body.angvel().y, targetYawRate, yawAlpha);
-    this.body.setAngvel({ x: 0, y: this.yawVelocity, z: 0 }, true);
-
+    // Shift before calculating this tick's wheel torque so the new ratio is
+    // applied immediately rather than one simulation frame late.
     this.updateTransmission(input, signedSpeed);
 
-    // S/reverse is represented by the existing brake-at-rest control. Emit one
-    // distinct drivetrain event when it transitions from braking to reverse.
-    if (input.brake > 0 && this.gear !== 0 && signedSpeed < 0.55 && signedSpeed > -0.55
-      && !this.reverseAudioLatched) {
+    // S/Down is a brake while the car is moving forward. Reverse only
+    // engages after the chassis has reached a genuine standstill and the
+    // driver keeps the brake input held for a short engagement interval.
+    const reverseRequested = input.brake > 0
+      && input.throttle < 0.05
+      && this.gear !== 0;
+    if (!reverseRequested) {
+      this.brakeToReverseTime = 0;
+      this.reverseEngaged = false;
+    } else if (!this.reverseEngaged && this.speedMps <= 0.18) {
+      this.brakeToReverseTime += safeDt;
+      if (this.brakeToReverseTime >= 0.4) this.reverseEngaged = true;
+    } else if (!this.reverseEngaged) {
+      this.brakeToReverseTime = 0;
+    }
+    const reverseMode = reverseRequested && this.reverseEngaged;
+
+    // Do not hard-clamp chassis velocity to a per-gear redline.
+    // Gear limits belong in the engine torque/rev-limiter model; directly
+    // rewriting velocity here creates an artificial speed wall and can
+    // destabilise the tyre solver during shifts or while cornering.
+
+    const profile = this.definition.physics;
+    const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
+    const coupledGear = reverseMode ? 1 : this.gear;
+    const gearRatio = coupledGear === 0
+      ? 0
+      : (profile.gearRatios[coupledGear - 1] ?? profile.gearRatios[0]);
+    const totalReduction = gearRatio * profile.finalDrive * profile.transferDrive;
+
+    // Model clutch slip during launch, then lock engine speed to driven-wheel
+    // RPM through the selected gear, final drive and transfer reduction.
+    const wheelRpm = Math.abs(signedSpeed) / (2 * Math.PI * profile.wheelRadiusM) * 60;
+    const rawCoupledRpm = coupledGear === 0 ? idleRpm : wheelRpm * totalReduction;
+    const clutchBlend = this.gear === 0
+      ? 0
+      : THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.35, 4.2);
+    const clutchEngagement = this.gear === 0 ? 0 : THREE.MathUtils.lerp(0.34, 1, clutchBlend);
+    const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
+    const freeRevTarget = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.72;
+    const coupledTargetRpm = THREE.MathUtils.clamp(rawCoupledRpm, idleRpm, this.definition.maxRpm);
+    const targetRpm = this.gear === 0
+      ? freeRevTarget
+      : THREE.MathUtils.lerp(launchRpm, coupledTargetRpm, clutchBlend);
+
+    // Once the clutch is locked, RPM is an exact consequence of wheel speed.
+    // During launch and neutral, the engine spools toward its free/coupled target.
+    this.rpm = clutchBlend >= 0.999 && this.gear !== 0
+      ? coupledTargetRpm
+      : THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 14 : 9, safeDt);
+
+    const torqueRpm = THREE.MathUtils.clamp(this.rpm, idleRpm, this.definition.maxRpm);
+    const torqueFactor = this.getTorqueFactor(torqueRpm);
+    const drivelineEfficiency = 0.90;
+    const crankshaftTorqueNm = this.definition.torqueNm * torqueFactor;
+    const angularSpeedRadPerSecond = Math.max(1, torqueRpm * Math.PI * 2 / 60);
+    const ratedPowerW = this.definition.powerHp * 745.699872;
+    const powerLimitedTorqueNm = ratedPowerW / angularSpeedRadPerSecond;
+    const usableCrankTorqueNm = Math.min(crankshaftTorqueNm, powerLimitedTorqueNm);
+    const wheelTorqueNm = usableCrankTorqueNm
+      * totalReduction
+      * drivelineEfficiency
+      * clutchEngagement
+      * (profile.hybridAssist ?? 1);
+    const requestedWheelForce = wheelTorqueNm / profile.wheelRadiusM;
+
+    // Limit torque at the ratio-derived redline, without imposing a vehicle
+    // speed cap. Coasting inertia can carry speed independently of propulsion.
+    const limiterRpm = Math.max(this.rpm, rawCoupledRpm);
+    const revLimiter = this.gear === 0
+      ? 1
+      : 1 - THREE.MathUtils.smoothstep(
+        limiterRpm,
+        this.definition.maxRpm * 0.985,
+        this.definition.maxRpm,
+      );
+    const engineForce = this.gear === 0
+      ? 0
+      : Math.max(
+        0,
+        Math.min(profile.maxDriveForce, requestedWheelForce)
+          * this.driveThrottle * revLimiter,
+      );
+
+    const drivenWheels = this.definition.drivetrain.toLowerCase().includes('all-wheel')
+      ? [0, 1, 2, 3]
+      : [0, 2];
+    // Rapier applies half of each wheel's longitudinal impulse.
+    // Divide the vehicle-level target force across driven wheels accordingly.
+    const drivePerWheel = engineForce * 2 / drivenWheels.length;
+    const braking = input.brake > 0 && !reverseMode;
+    const reverseSpeedLimit = 6; // 21.6 km/h; independent of forward gear ratios.
+    const reverseForce = reverseMode && signedSpeed > -reverseSpeedLimit
+      ? -profile.maxDriveForce * 0.22 * input.brake * torqueFactor
+      : 0;
+    // Rapier's wheel engine force is signed: negative force drives the tyres
+    // backward through the same contact/friction solver as forward propulsion.
+    const reversePerWheel = reverseForce * 2 / drivenWheels.length;
+    const wheelDriveForce = braking ? 0 : reverseMode ? reversePerWheel : drivePerWheel;
+
+    // Limit lateral acceleration through the road-wheel angle, rather than
+    // leaving near-parking steering lock available at motorway speeds.
+    // a_lat = v^2 * tan(delta) / wheelbase; cap commanded cornering demand
+    // to a conservative fraction of gravity so a digital steering input
+    // cannot abruptly rotate the chassis at speed.
+    const steeringWheelbase = this.definition.visual.wheelBase;
+    const maxLateralAcceleration = 0.72 * 9.81;
+    const dynamicSteerLimit = Math.atan(
+      (steeringWheelbase * maxLateralAcceleration) / (this.speedMps * this.speedMps + 1.5),
+    );
+    const maxSteerAngle = Math.min(0.34, dynamicSteerLimit);
+    const centreSteerAngle = THREE.MathUtils.clamp(this.smoothedSteer, -1, 1) * maxSteerAngle;
+
+    // Ackermann geometry: the front tyres converge on a shared instantaneous
+    // turn centre on the rear-axle line. The inside front wheel therefore turns
+    // farther than the outside wheel. Rear wheels remain straight.
+    let leftFrontSteer = 0;
+    let rightFrontSteer = 0;
+    const turnMagnitude = Math.abs(centreSteerAngle);
+    if (turnMagnitude > 1e-4) {
+      const wheelbase = this.definition.visual.wheelBase;
+      const halfTrack = this.definition.visual.wheelTrack * 0.5;
+      const turnRadius = wheelbase / Math.tan(turnMagnitude);
+      const innerAngle = Math.atan(wheelbase / Math.max(0.1, turnRadius - halfTrack));
+      const outerAngle = Math.atan(wheelbase / (turnRadius + halfTrack));
+
+      // Rapier rotates the wheel axle about chassis-up before deriving its
+      // rolling direction. With our -X axle, positive input must stay positive
+      // for D/right to turn the front wheels to the vehicle's right.
+      const controllerSign = Math.sign(centreSteerAngle);
+      if (centreSteerAngle > 0) {
+        // Right turn: right front tyre is inside.
+        leftFrontSteer = controllerSign * outerAngle;
+        rightFrontSteer = controllerSign * innerAngle;
+      } else {
+        // Left turn: left front tyre is inside.
+        leftFrontSteer = controllerSign * innerAngle;
+        rightFrontSteer = controllerSign * outerAngle;
+      }
+    }
+    // Rapier's wheelBrake argument is a per-step impulse, not a force in N.
+    const baseBrake = braking ? profile.brakeForce * input.brake * safeDt / 4 : 0;
+    const coastBrake = this.driveThrottle < 0.015 && input.brake === 0 && this.gear !== 0
+      ? profile.engineBrakeForce * 0.22 * safeDt / drivenWheels.length
+      : 0;
+    const handbrakeImpulse = this.handbrake ? profile.brakeForce * 0.62 * safeDt / 2 : 0;
+
+    for (let i = 0; i < 4; i++) {
+      const driven = drivenWheels.includes(i);
+      const front = i === 1 || i === 3;
+      this.wheelController.setWheelEngineForce(i, driven ? wheelDriveForce : 0);
+      this.wheelController.setWheelBrake(
+        i,
+        baseBrake + (this.handbrake && !front ? handbrakeImpulse : 0)
+          + (driven ? coastBrake : 0),
+      );
+      this.wheelController.setWheelSteering(
+        i,
+        i === 1 ? leftFrontSteer : i === 3 ? rightFrontSteer : 0,
+      );
+    }
+
+    // Evaluate tyre contacts before the matching Rapier fixed-step.
+    this.wheelController.updateVehicle(safeDt, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
+
+    // Aerodynamic drag grows with velocity squared; rolling resistance
+    // prevents the car coasting indefinitely when the engine is off-load.
+    if (this.speedMps > 0.05) {
+      const airDensity = 1.225;
+      const aerodynamicDrag = 0.5 * airDensity * profile.dragAreaM2 * this.speedMps * this.speedMps;
+      const rollingResistance = profile.massKg * 9.81 * profile.rollingResistanceCoefficient;
+      const stoppingForceLimit = profile.massKg * this.speedMps / safeDt * 0.8;
+      const roadLoad = Math.min(aerodynamicDrag + rollingResistance, stoppingForceLimit);
+      const dragScale = -roadLoad / this.speedMps;
+      // Rapier user forces persist across simulation steps until resetForces()
+      // is called. Road load is recomputed every tick, so applying it as the
+      // timestep-scaled impulse F * dt avoids accumulating old drag forces.
+      this.body.applyImpulse({
+        x: this.velocity.x * dragScale * safeDt,
+        y: 0,
+        z: this.velocity.z * dragScale * safeDt,
+      }, true);
+    }
+
+    // Reverse is transmitted through the driven tyres above; do not add a
+    // second chassis-level force, which bypasses tyre contact and traction.
+    this.lastAppliedForwardForce = reverseMode ? reverseForce : (braking ? 0 : engineForce);
+
+    if (reverseMode && !this.reverseAudioLatched) {
       this.shiftEvents.push({
         previousGear: this.gear,
         newGear: this.gear,
         direction: 'reverse',
         type: 'reverse',
         currentRpm: this.rpm,
-        targetRpm: Math.max(850, this.rpm * 0.92),
+        targetRpm: Math.max(idleRpm, this.rpm * 0.92),
         automatic: !this.manualTransmission,
       });
       this.reverseAudioLatched = true;
-    } else if (input.brake === 0 && signedSpeed >= -0.1) {
+    } else if (!reverseMode && signedSpeed >= -0.1) {
       this.reverseAudioLatched = false;
     }
 
-    const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
-    const freeRevRpm = idleRpm + input.throttle * (this.definition.maxRpm - idleRpm) * 0.84;
-    const coupledRpm = this.gear === 0
-      ? idleRpm
-      : this.calculateCoupledRpm(this.gear, Math.abs(signedSpeed));
-    const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.8, 7.5);
-    const targetRpm = this.gear === 0
-      ? freeRevRpm
-      : THREE.MathUtils.lerp(freeRevRpm, coupledRpm, clutchEngagement);
-    this.rpm = THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 8 : 4.5, safeDt);
-
-    for (const wheel of this.wheelMeshes) wheel.rotation.x -= signedSpeed * safeDt / 0.35;
-    this.syncVisual();
     return this.getTelemetry();
   }
 
   /** Read telemetry after world.step() so the HUD reports the current solver result. */
   getTelemetry(): VehicleTelemetry {
     const p = this.body.translation();
-    const q = this.body.rotation();
-    this.scratchQuat.set(q.x, q.y, q.z, q.w);
-    this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
-
     const bodyVelocity = this.body.linvel();
     this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
     this.speedMps = this.velocity.length();
-    const signedSpeed = this.velocity.dot(this.forward);
 
     if (this.hasDistanceSample) {
       const movement = Math.hypot(p.x - this.lastDistanceX, p.z - this.lastDistanceZ);
@@ -267,7 +417,7 @@ export class VehicleController {
       speedKmh: this.speedMps * 3.6,
       rpm: this.rpm,
       gear: this.gear,
-      gearLabel: this.gear === 0 ? 'N' : signedSpeed < -0.7 ? 'R' : String(this.gear),
+      gearLabel: this.gear === 0 ? 'N' : this.reverseEngaged ? 'R' : String(this.gear),
       transmissionMode: this.manualTransmission ? 'MANUAL' : 'AUTO',
       throttle: this.lastInput.throttle,
       steer: this.lastInput.steer,
@@ -330,8 +480,22 @@ export class VehicleController {
   syncVisual(): void {
     const p = this.body.translation();
     const q = this.body.rotation();
-    this.visual.position.set(p.x, p.y - 0.05, p.z);
+    this.visual.position.set(p.x, p.y, p.z);
     this.visual.quaternion.set(q.x, q.y, q.z, q.w);
+
+    for (let i = 0; i < this.wheelMeshes.length; i++) {
+      const wheel = this.wheelMeshes[i];
+      const suspensionLength = this.wheelController.wheelSuspensionLength(i) ?? WHEEL_REST_LENGTH;
+      const rotation = this.wheelController.wheelRotation(i);
+      wheel.steeringPivot.position.y = WHEEL_CONNECTION_Y - suspensionLength;
+      wheel.steeringPivot.rotation.y = i === 1 || i === 3
+        ? (this.wheelController.wheelSteering(i) ?? 0)
+        : 0;
+      if (rotation !== null && Number.isFinite(rotation)) {
+        // Rapier's wheel angle is positive for forward travel along local +Z.
+        wheel.rolling.rotation.x = rotation;
+      }
+    }
   }
 
   getPosition(target = new THREE.Vector3()): THREE.Vector3 {
@@ -381,15 +545,25 @@ export class VehicleController {
     this.gear = 1;
     this.speedMps = 0;
     this.smoothedSteer = 0;
-    this.yawVelocity = 0;
     this.lastAppliedForwardForce = 0;
-    this.lastShiftAt = 0;
+    this.driveThrottle = 0;
+    this.brakeToReverseTime = 0;
+    this.reverseEngaged = false;
+    this.simulationTimeMs = 0;
+    this.lastShiftAt = -240;
     this.shiftEvents.length = 0;
     this.reverseAudioLatched = false;
     this.handbrake = false;
     this.lastInput = { ...NEUTRAL_INPUT };
-    this.force.set(0, 0, 0);
-    for (const wheel of this.wheelMeshes) wheel.rotation.x = 0;
+    for (const wheel of this.wheelMeshes) {
+      wheel.steeringPivot.rotation.set(0, 0, 0);
+      wheel.rolling.rotation.set(0, 0, 0);
+    }
+    for (let i = 0; i < 4; i++) {
+      this.wheelController.setWheelEngineForce(i, 0);
+      this.wheelController.setWheelBrake(i, 0);
+      this.wheelController.setWheelSteering(i, 0);
+    }
     this.syncVisual();
   }
 
@@ -410,17 +584,16 @@ export class VehicleController {
         for (const mat of materials) mat.dispose();
       }
     });
+    world.removeVehicleController(this.wheelController);
     world.removeRigidBody(this.body);
     this.shiftEvents.length = 0;
   }
 
-  private calculateCoupledRpm(gear: number, speedMps: number): number {
+  private calculateRawCoupledRpm(gear: number, speedMps: number): number {
     const profile = this.definition.physics;
     const ratio = profile.gearRatios[gear - 1] ?? profile.gearRatios[0];
     const wheelRpm = speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
-    const rpm = wheelRpm * ratio * profile.finalDrive * profile.transferDrive;
-    const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
-    return THREE.MathUtils.clamp(rpm, idleRpm, this.definition.maxRpm);
+    return wheelRpm * ratio * profile.finalDrive * profile.transferDrive;
   }
 
   private getTorqueFactor(rpm: number): number {
@@ -450,7 +623,7 @@ export class VehicleController {
     if (previousGear === nextGear) return;
     const targetRpm = nextGear === 0
       ? this.rpm
-      : this.calculateCoupledRpm(nextGear, Math.abs(signedSpeed));
+      : this.calculateRawCoupledRpm(nextGear, Math.abs(signedSpeed));
     // Reject any downshift that would mechanically overspeed the engine.
     if (nextGear < previousGear && nextGear > 0 && targetRpm > this.definition.maxRpm * 0.985) return;
 
@@ -471,7 +644,7 @@ export class VehicleController {
     }
 
     this.gear = nextGear;
-    this.lastShiftAt = performance.now();
+    this.lastShiftAt = this.simulationTimeMs;
     this.shiftEvents.push({
       previousGear,
       newGear: nextGear,
@@ -494,12 +667,22 @@ export class VehicleController {
       return;
     }
 
-    if (this.gear === 0) return;
-    const projectedRpm = this.calculateCoupledRpm(this.gear, Math.abs(signedSpeed));
-    if (projectedRpm > this.definition.maxRpm * 0.87 && this.gear < gearCount) {
+    if (this.gear === 0 || signedSpeed < -0.25) return;
+    // Do not upshift/downshift the forward gearbox while the vehicle is moving backward.
+    // Keep automatic shifts sequential and prevent hunting around a shift point.
+    if (this.simulationTimeMs - this.lastShiftAt < 240) return;
+    const projectedRpm = this.calculateRawCoupledRpm(this.gear, Math.abs(signedSpeed));
+    const throttle = THREE.MathUtils.clamp(Math.max(input.throttle, this.driveThrottle), 0, 1);
+    const upshiftThreshold = this.definition.maxRpm * THREE.MathUtils.lerp(0.74, 0.91, throttle);
+    const downshiftThreshold = Math.max(
+      1850,
+      this.definition.maxRpm * 0.28,
+    );
+
+    if (projectedRpm >= upshiftThreshold && this.gear < gearCount) {
       this.changeGear(this.gear + 1, signedSpeed, true);
-    } else if (projectedRpm < Math.max(1850, this.definition.maxRpm * 0.23)
-      && this.gear > 1 && Math.abs(signedSpeed) > 2) {
+    } else if (projectedRpm <= downshiftThreshold
+      && this.gear > 1 && Math.abs(signedSpeed) > 3.5) {
       this.changeGear(this.gear - 1, signedSpeed, true);
     }
   }
