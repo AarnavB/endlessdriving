@@ -213,7 +213,7 @@ export class VehicleController {
 
     // Model clutch slip during launch, then lock engine speed to driven-wheel
     // RPM through the selected gear, final drive and transfer reduction.
-    const wheelRpm = this.speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
+    const wheelRpm = Math.abs(signedSpeed) / (2 * Math.PI * profile.wheelRadiusM) * 60;
     const rawCoupledRpm = coupledGear === 0 ? idleRpm : wheelRpm * totalReduction;
     const clutchBlend = this.gear === 0
       ? 0
