@@ -62,7 +62,8 @@ export class VehicleController {
   private lastDistanceX = 0;
   private lastDistanceZ = 0;
   private hasDistanceSample = false;
-  private lastShiftAt = 0;
+  private simulationTimeMs = 0;
+  private lastShiftAt = -240;
   private lastAppliedForwardForce = 0;
   private lastInput: InputState = { ...NEUTRAL_INPUT };
   private readonly shiftEvents: VehicleShiftEvent[] = [];
@@ -148,6 +149,7 @@ export class VehicleController {
 
   update(dt: number, input: InputState): VehicleTelemetry {
     const safeDt = THREE.MathUtils.clamp(dt, 1 / 240, 1 / 30);
+    this.simulationTimeMs += safeDt * 1000;
     this.lastInput = input;
 
     const q = this.body.rotation();
@@ -542,7 +544,8 @@ export class VehicleController {
     this.driveThrottle = 0;
     this.brakeToReverseTime = 0;
     this.reverseEngaged = false;
-    this.lastShiftAt = 0;
+    this.simulationTimeMs = 0;
+    this.lastShiftAt = -240;
     this.shiftEvents.length = 0;
     this.reverseAudioLatched = false;
     this.handbrake = false;
@@ -633,7 +636,7 @@ export class VehicleController {
     }
 
     this.gear = nextGear;
-    this.lastShiftAt = performance.now();
+    this.lastShiftAt = this.simulationTimeMs;
     this.shiftEvents.push({
       previousGear,
       newGear: nextGear,
@@ -659,7 +662,7 @@ export class VehicleController {
     if (this.gear === 0 || signedSpeed < -0.25) return;
     // Do not upshift/downshift the forward gearbox while the vehicle is moving backward.
     // Keep automatic shifts sequential and prevent hunting around a shift point.
-    if (performance.now() - this.lastShiftAt < 240) return;
+    if (this.simulationTimeMs - this.lastShiftAt < 240) return;
     const projectedRpm = this.calculateRawCoupledRpm(this.gear, Math.abs(signedSpeed));
     const throttle = THREE.MathUtils.clamp(Math.max(input.throttle, this.driveThrottle), 0, 1);
     const upshiftThreshold = this.definition.maxRpm * THREE.MathUtils.lerp(0.74, 0.91, throttle);

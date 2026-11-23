@@ -161,7 +161,10 @@ try {
       );
       assert(gearTransitions > 0, `${definition.name}: transmission did not change gear`);
       if (!manual && maxSpeedKmh > 100) {
-        assert(maxGear >= 2, `${definition.name}: automatic transmission failed to upshift`);
+        assert(
+          maxGear >= 3 && gearTransitions >= 2,
+          `${definition.name}: automatic gearbox did not progressively upshift beyond second gear (highest=${maxGear}, shifts=${gearTransitions})`,
+        );
       }
 
       return {
