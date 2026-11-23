@@ -165,6 +165,10 @@ try {
           maxGear >= 3 && gearTransitions >= 2,
           `${definition.name}: automatic gearbox did not progressively upshift beyond second gear (highest=${maxGear}, shifts=${gearTransitions})`,
         );
+        assert(
+          gearTransitions === maxGear - 1,
+          `${definition.name}: automatic gearbox hunted or skipped sequential forward gears (highest=${maxGear}, shifts=${gearTransitions})`,
+        );
       }
 
       return {
@@ -301,23 +305,56 @@ try {
     const sim = createSimulation(defaultVehicle, false, dt);
     let minimumSignedSpeedMps = 0;
     let maximumSpeedKmh = 0;
+    let previousGear = 1;
+    const gearTransitions = [];
     try {
       for (let i = 0; i < Math.ceil(12 / dt); i++) {
         const { telemetry, debug, residualUserForce } = sim.step(FORWARD_INPUT);
         minimumSignedSpeedMps = Math.min(minimumSignedSpeedMps, debug.forwardSpeed);
         maximumSpeedKmh = Math.max(maximumSpeedKmh, telemetry.speedKmh);
+        if (telemetry.gear !== previousGear) {
+          gearTransitions.push({
+            gear: telemetry.gear,
+            simulationTimeSeconds: Number(((i + 1) * dt).toFixed(4)),
+          });
+          previousGear = telemetry.gear;
+        }
         assert(debug.forwardSpeed >= -0.15, `F40 reversed at timestep ${dt}`);
         assert(debug.appliedForwardForce >= -1e-6, `F40 produced negative propulsion at timestep ${dt}`);
         assert(residualUserForce < 1e-6, `F40 retained a persistent force at timestep ${dt}`);
       }
+      assert(
+        gearTransitions.length >= 2,
+        `F40 automatic gearbox failed to exercise multiple shifts at timestep ${dt}`,
+      );
       timestepRuns.push({
         timestepSeconds: Number(dt.toFixed(6)),
         minimumSignedSpeedMps: Number(minimumSignedSpeedMps.toFixed(3)),
         maximumSpeedKmh: Number(maximumSpeedKmh.toFixed(1)),
+        gearTransitions,
         result: 'PASS',
       });
     } finally {
       sim.dispose();
+    }
+  }
+
+  const referenceShiftSequence = timestepRuns[0].gearTransitions.map((event) => event.gear);
+  for (const run of timestepRuns.slice(1)) {
+    const sequence = run.gearTransitions.map((event) => event.gear);
+    assert.deepEqual(
+      sequence,
+      referenceShiftSequence,
+      `F40 automatic gear sequence changed at timestep ${run.timestepSeconds}`,
+    );
+    for (let i = 0; i < run.gearTransitions.length; i++) {
+      assert(
+        Math.abs(
+          run.gearTransitions[i].simulationTimeSeconds
+          - timestepRuns[0].gearTransitions[i].simulationTimeSeconds,
+        ) <= 0.25,
+        `F40 shift to gear ${sequence[i]} occurred at inconsistent simulation time for timestep ${run.timestepSeconds}`,
+      );
     }
   }
 
