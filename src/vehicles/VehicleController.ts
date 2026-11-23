@@ -214,7 +214,7 @@ export class VehicleController {
       : 1;
 
     const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
-    const coupledGear = signedSpeed < -0.15 ? 1 : this.gear;
+    const coupledGear = reverseMode ? 1 : this.gear;
     const rawCoupledRpm = this.gear === 0
       ? idleRpm
       : this.calculateRawCoupledRpm(coupledGear, Math.abs(signedSpeed));
@@ -247,8 +247,11 @@ export class VehicleController {
       );
     const engineForce = this.gear === 0
       ? 0
-      : Math.min(profile.maxDriveForce, requestedWheelForce)
-        * this.driveThrottle * speedFade * hybridAssist * revLimiter;
+      : Math.max(
+        0,
+        Math.min(profile.maxDriveForce, requestedWheelForce)
+          * this.driveThrottle * speedFade * hybridAssist * revLimiter,
+      );
 
     const drivenWheels = this.definition.drivetrain.toLowerCase().includes('all-wheel')
       ? [0, 1, 2, 3]
@@ -341,10 +344,13 @@ export class VehicleController {
       const stoppingForceLimit = profile.massKg * this.speedMps / safeDt * 0.8;
       const roadLoad = Math.min(aerodynamicDrag + rollingResistance, stoppingForceLimit);
       const dragScale = -roadLoad / this.speedMps;
-      this.body.addForce({
-        x: this.velocity.x * dragScale,
+      // Rapier user forces persist across simulation steps until resetForces()
+      // is called. Road load is recomputed every tick, so applying it as the
+      // timestep-scaled impulse F * dt avoids accumulating old drag forces.
+      this.body.applyImpulse({
+        x: this.velocity.x * dragScale * safeDt,
         y: 0,
-        z: this.velocity.z * dragScale,
+        z: this.velocity.z * dragScale * safeDt,
       }, true);
     }
 
@@ -414,7 +420,7 @@ export class VehicleController {
       speedKmh: this.speedMps * 3.6,
       rpm: this.rpm,
       gear: this.gear,
-      gearLabel: this.gear === 0 ? 'N' : signedSpeed < -0.7 ? 'R' : String(this.gear),
+      gearLabel: this.gear === 0 ? 'N' : this.reverseEngaged ? 'R' : String(this.gear),
       transmissionMode: this.manualTransmission ? 'MANUAL' : 'AUTO',
       throttle: this.lastInput.throttle,
       steer: this.lastInput.steer,
