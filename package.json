@@ -7,11 +7,14 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test:drivetrain": "node tests/drivetrain-regression.mjs"
+    "test:drivetrain": "node tests/drivetrain-regression.mjs",
+    "test:nyc-geo": "node tests/nyc-geo-regression.mjs",
+    "test:world": "npm run test:nyc-geo"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
-    "three": "^0.187.0"
+    "three": "^0.187.0",
+    "3d-tiles-renderer": "^0.5.4"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.5",

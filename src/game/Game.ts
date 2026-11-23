@@ -4,6 +4,8 @@ import { InputManager } from './InputManager';
 import { CameraRig } from './CameraRig';
 import { TrafficSystem } from './TrafficSystem';
 import { RoadChunkManager } from '../world/RoadChunkManager';
+import { NYCCityChunkManager } from '../world/nyc/NYCCityChunkManager';
+import { GooglePhotorealisticTiles } from '../world/nyc/GooglePhotorealisticTiles';
 import { RoadPath } from '../world/RoadPath';
 import { VehicleController } from '../vehicles/VehicleController';
 import { getVehicleDefinition, loadSelectedVehicleId, saveSelectedVehicleId } from '../vehicles/VehicleDefinitions';
@@ -16,7 +18,7 @@ import type { GameSettings, InputState, VehicleTelemetry } from '../types';
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+  private readonly camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 6000);
   private readonly input = new InputManager();
   private readonly audio = new EngineAudio();
   private readonly cameraRig: CameraRig;
@@ -30,7 +32,9 @@ export class Game {
   private latestTelemetry: VehicleTelemetry | null = null;
   private readonly roadPath = new RoadPath(20261122);
   private readonly worldOffset = new THREE.Vector3();
-  private worldScene!: RoadChunkManager;
+  private worldScene!: RoadChunkManager | NYCCityChunkManager;
+  private googleTiles: GooglePhotorealisticTiles | null = null;
+  private cityDataAttribution: HTMLDivElement | null = null;
   private physics!: RAPIER.World;
   private vehicle!: VehicleController;
   private traffic!: TrafficSystem;
@@ -133,7 +137,8 @@ export class Game {
   static async create(canvas: HTMLCanvasElement, uiRoot: HTMLElement, settings: GameSettings): Promise<Game> {
     await RAPIER.init();
     const game = new Game(canvas, uiRoot, settings);
-    game.initializePhysics();
+    await game.initializePhysics();
+    game.initializeGoogleTiles();
     game.startLoop();
     return game;
   }
@@ -150,12 +155,14 @@ export class Game {
     this.debugOverlay.dispose();
     this.traffic.dispose();
     this.worldScene.dispose();
+    this.googleTiles?.dispose();
+    this.cityDataAttribution?.remove();
     this.renderer.dispose();
     this.physics.free();
   }
 
   private getSpawnPosition(): THREE.Vector3 {
-    const position = this.roadPath.getLanePositionAtWorldZ(-70, -1.8).sub(this.worldOffset);
+    const position = this.roadPath.getLanePositionAtWorldZ(-70, 1.8).sub(this.worldOffset);
     position.y += 0.72;
     return position;
   }
@@ -213,15 +220,38 @@ export class Game {
     this.ui.setTransmissionMode(this.manualTransmission ? 'MANUAL' : 'AUTO', true);
   }
 
-  private initializePhysics(): void {
+  private async initializePhysics(): Promise<void> {
     this.physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.physics.timestep = this.fixedTimeStep;
     this.physics.numSolverIterations = 8;
     this.physics.numInternalPgsIterations = 2;
 
-    this.worldScene = new RoadChunkManager(this.scene, this.physics, this.roadPath);
     const spawnPosition = this.getSpawnPosition();
-    this.worldScene.update(spawnPosition);
+    const cityWorld = new NYCCityChunkManager(this.scene, this.physics, this.roadPath);
+    try {
+      await cityWorld.initialize(spawnPosition);
+      this.worldScene = cityWorld;
+      this.cityDataAttribution = document.createElement('div');
+      this.cityDataAttribution.setAttribute('aria-label', 'NYC Open Data attribution');
+      this.cityDataAttribution.textContent = 'NYC Open Data  ·  OTI — Building Footprints + Street Centerline';
+      this.cityDataAttribution.style.position = 'fixed';
+      this.cityDataAttribution.style.left = '12px';
+      this.cityDataAttribution.style.bottom = '9px';
+      this.cityDataAttribution.style.zIndex = '10000';
+      this.cityDataAttribution.style.padding = '5px 8px';
+      this.cityDataAttribution.style.borderRadius = '3px';
+      this.cityDataAttribution.style.background = 'rgba(0, 0, 0, 0.76)';
+      this.cityDataAttribution.style.color = '#fff';
+      this.cityDataAttribution.style.font = '11px/1.4 Arial, sans-serif';
+      this.cityDataAttribution.style.pointerEvents = 'none';
+      document.body.appendChild(this.cityDataAttribution);
+    } catch (error) {
+      console.error('NYC Open Data world could not load; retaining the original fallback world:', error);
+      cityWorld.dispose();
+      const fallbackWorld = new RoadChunkManager(this.scene, this.physics, this.roadPath);
+      fallbackWorld.update(spawnPosition);
+      this.worldScene = fallbackWorld;
+    }
 
     this.vehicle = new VehicleController(this.physics, this.scene, getVehicleDefinition(loadSelectedVehicleId()));
     this.vehicle.setManualTransmission(this.manualTransmission);
@@ -234,6 +264,21 @@ export class Game {
     );
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.latestTelemetry = this.vehicle.getTelemetry();
+  }
+
+  private initializeGoogleTiles(): void {
+    const environment = (import.meta as ImportMeta & { env: Record<string, string | undefined> }).env;
+    const apiKey = environment.VITE_GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      console.info('Google Photorealistic 3D Tiles disabled: VITE_GOOGLE_MAPS_API_KEY is not configured.');
+      return;
+    }
+    try {
+      this.googleTiles = new GooglePhotorealisticTiles(this.scene, this.camera, this.renderer, apiKey);
+    } catch (error) {
+      console.error('Google Photorealistic 3D Tiles could not initialize:', error);
+      this.googleTiles = null;
+    }
   }
 
   private startLoop(): void {
@@ -249,6 +294,7 @@ export class Game {
         if (!this.paused) this.step(frameDt);
         else this.input.drainEdges();
         this.garagePreview.update(frameDt, this.ui.isGarageVisible());
+        this.googleTiles?.update();
         this.renderer.render(this.scene, this.camera);
         this.updateFps();
       } catch (error) {

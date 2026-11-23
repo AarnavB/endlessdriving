@@ -155,9 +155,11 @@ export class TrafficSystem {
     for (let index = 0; index < 6; index++) {
       const sequence = Math.floor(index / 2);
       const direction: 1 | -1 = index % 2 === 0 ? 1 : -1;
+      // +Z is north in the NYC ENU frame. Positive lateral offsets are
+      // east/right of that heading; opposing traffic occupies the west side.
       const laneOffset = direction === 1
-        ? (sequence % 2 === 0 ? ROAD_LANE_OFFSETS[0] : ROAD_LANE_OFFSETS[1])
-        : (sequence % 2 === 0 ? ROAD_LANE_OFFSETS[2] : ROAD_LANE_OFFSETS[3]);
+        ? (sequence % 2 === 0 ? ROAD_LANE_OFFSETS[2] : ROAD_LANE_OFFSETS[3])
+        : (sequence % 2 === 0 ? ROAD_LANE_OFFSETS[1] : ROAD_LANE_OFFSETS[0]);
       const distance = startDistance + 105 + sequence * 48;
       const sample = this.path.sample(distance);
       const position = sample.position.clone().addScaledVector(sample.right, laneOffset).sub(this.originOffset);
