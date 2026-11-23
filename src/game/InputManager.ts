@@ -3,6 +3,15 @@ import type { InputState } from '../types';
 type GameAction = 'pause' | 'camera' | 'reset' | 'hud' | 'interact' | 'transmission' | 'debug';
 
 /**
+ * Reverse the steering direction at the input boundary.
+ * This applies equally to keyboard and gamepad input while leaving the
+ * vehicle's steering geometry and physics conventions unchanged.
+ */
+export function invertSteeringDirection(steer: number): number {
+  return -steer;
+}
+
+/**
  * Keyboard input is captured at document level (capture phase) so focus on a
  * menu button cannot prevent the game from receiving driving keys.
  * Edge-triggered keys are retained until a physics tick consumes them.
@@ -36,8 +45,8 @@ export class InputManager {
     return {
       throttle: this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0,
       brake: this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0,
-      // Standard gamepad axis 0: negative = left, positive = right.
-      steer: Math.abs(gamepadSteer) > 0 ? gamepadSteer : keyboardSteer,
+      // Reverse the selected source once here so keyboard and gamepad agree.
+      steer: invertSteeringDirection(Math.abs(gamepadSteer) > 0 ? gamepadSteer : keyboardSteer),
       handbrake: this.keys.has('Space'),
       shiftUpPressed: this.justPressed.has('KeyE'),
       shiftDownPressed: this.justPressed.has('KeyQ'),
