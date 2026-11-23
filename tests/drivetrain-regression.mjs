@@ -424,6 +424,54 @@ try {
           `${definition.name}: gear ${i + 1} has no higher redline speed than gear ${i}`,
         );
       }
+      const isolatedGearRuns = [];
+      for (let gear = 1; gear <= profile.gearRatios.length; gear++) {
+        const gearSim = createSimulation(definition, true, FIXED_DT);
+        try {
+          const expected = redlineSpeeds[gear - 1];
+          const startSpeedMps = expected.redlineSpeedKmh / 3.6 * 0.94;
+          gearSim.vehicle.body.setLinvel({ x: 0, y: 0, z: startSpeedMps }, true);
+          gearSim.vehicle.selectGear(gear);
+          let maximumSpeedKmh = 0;
+          for (let i = 0; i < 150; i++) {
+            const { telemetry } = gearSim.step(FORWARD_INPUT);
+            maximumSpeedKmh = Math.max(maximumSpeedKmh, telemetry.speedKmh);
+            assert.equal(
+              telemetry.gear,
+              gear,
+              `${definition.name}: manual gear ${gear} changed without a player shift`,
+            );
+            assert(
+              telemetry.rpm <= definition.maxRpm * 1.02,
+              `${definition.name}: gear ${gear} exceeded engine redline`,
+            );
+            if (telemetry.speedMps > 8 && telemetry.rpm < definition.maxRpm * 0.96) {
+              const wheelRpm = telemetry.speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
+              const expectedRpm = wheelRpm * profile.gearRatios[gear - 1]
+                * profile.finalDrive * profile.transferDrive;
+              assert(
+                Math.abs(telemetry.rpm - expectedRpm) < definition.maxRpm * 0.05,
+                `${definition.name}: gear ${gear} RPM is not coupled to wheel speed`,
+              );
+            }
+          }
+          const finalTelemetry = gearSim.vehicle.getTelemetry();
+          assert(
+            maximumSpeedKmh <= expected.redlineSpeedKmh * 1.12 + 3,
+            `${definition.name}: gear ${gear} exceeded ratio-derived redline speed (${maximumSpeedKmh.toFixed(1)} > ${expected.redlineSpeedKmh.toFixed(1)} km/h)`,
+          );
+          isolatedGearRuns.push({
+            gear,
+            ratio: expected.ratio,
+            calculatedRedlineSpeedKmh: Number(expected.redlineSpeedKmh.toFixed(1)),
+            measuredMaximumSpeedKmh: Number(maximumSpeedKmh.toFixed(1)),
+            finalEngineRpm: Math.round(finalTelemetry.rpm),
+            result: 'PASS',
+          });
+        } finally {
+          gearSim.dispose();
+        }
+      }
       return {
         vehicle: definition.name,
         manualGearHeld: 1,
@@ -433,6 +481,7 @@ try {
         })),
         measuredFirstGearSpeedKmh: Number(telemetry.speedKmh.toFixed(1)),
         finalEngineRpm: Math.round(telemetry.rpm),
+        isolatedGearRuns,
         result: 'PASS',
       };
     } finally {
@@ -447,11 +496,9 @@ try {
   }
 
   const defaultVehicle = VEHICLE_CATALOGUE[0];
-  const scenarioRuns = [
-    runCoastBrakeAndReverse(defaultVehicle),
-    runSteeringRegression(defaultVehicle),
-    runWheelPhysicsRegression(defaultVehicle),
-  ];
+  const scenarioRuns = [runCoastBrakeAndReverse(defaultVehicle)];
+  const steeringRuns = VEHICLE_CATALOGUE.map(runSteeringRegression);
+  const wheelPhysicsRuns = VEHICLE_CATALOGUE.map(runWheelPhysicsRegression);
   const perGearRuns = VEHICLE_CATALOGUE.map(runPerGearMechanicalChecks);
 
   const timestepRuns = [];
@@ -517,12 +564,19 @@ try {
     fixedTimestepSeconds: FIXED_DT,
     vehicleRuns,
     scenarioRuns,
+    steeringRuns,
+    wheelPhysicsRuns,
+    perGearRuns,
     timestepRuns,
     summary: {
       vehicleRunsPassed: vehicleRuns.length,
       vehicleRunsFailed: 0,
       scenarioRunsPassed: scenarioRuns.length,
       scenarioRunsFailed: 0,
+      steeringRunsPassed: steeringRuns.length,
+      steeringRunsFailed: 0,
+      wheelPhysicsRunsPassed: wheelPhysicsRuns.length,
+      wheelPhysicsRunsFailed: 0,
       timestepRunsPassed: timestepRuns.length,
       perGearRunsPassed: perGearRuns.length,
       perGearRunsFailed: 0,
