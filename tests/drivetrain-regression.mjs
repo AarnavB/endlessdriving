@@ -112,6 +112,16 @@ try {
           wheelEngineForces: [0, 1, 2, 3].map(i => Number((wheelController.wheelEngineForce(i) ?? 0).toFixed(1))),
           wheelBrakes: [0, 1, 2, 3].map(i => Number((wheelController.wheelBrake(i) ?? 0).toFixed(3))),
           wheelContacts: [0, 1, 2, 3].map(i => wheelController.wheelIsInContact(i)),
+          wheelForwardImpulses: [0, 1, 2, 3].map(i => Number((wheelController.wheelForwardImpulse(i) ?? 0).toFixed(4))),
+          wheelSideImpulses: [0, 1, 2, 3].map(i => Number((wheelController.wheelSideImpulse(i) ?? 0).toFixed(4))),
+          wheelContactNormals: [0, 1, 2, 3].map(i => {
+            const v = wheelController.wheelContactNormal(i);
+            return v ? [Number(v.x.toFixed(3)), Number(v.y.toFixed(3)), Number(v.z.toFixed(3))] : null;
+          }),
+          wheelAxles: [0, 1, 2, 3].map(i => {
+            const v = wheelController.wheelAxleCs(i);
+            return v ? [Number(v.x.toFixed(3)), Number(v.y.toFixed(3)), Number(v.z.toFixed(3))] : null;
+          }),
         };
         recentSamples.push(sample);
         if (recentSamples.length > 10) recentSamples.shift();
