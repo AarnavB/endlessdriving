@@ -55,12 +55,20 @@ try {
       scene,
       vehicle,
       step(input) {
+        const before = vehicle.body.linvel();
         vehicle.update(dt, input);
+        const afterController = vehicle.body.linvel();
         world.step();
+        const afterWorld = vehicle.body.linvel();
         vehicle.syncVisual();
         return {
           telemetry: vehicle.getTelemetry(),
           debug: vehicle.getDebugTelemetry(input, dt, 1),
+          phases: {
+            before: [before.x, before.y, before.z],
+            afterController: [afterController.x, afterController.y, afterController.z],
+            afterWorld: [afterWorld.x, afterWorld.y, afterWorld.z],
+          },
         };
       },
       dispose() {
@@ -90,7 +98,7 @@ try {
         };
         upshiftNextTick = false;
 
-        const { telemetry, debug } = sim.step(input);
+        const { telemetry, debug, phases } = sim.step(input);
         const rotation = sim.vehicle.body.rotation();
         const yaw = Math.atan2(
           2 * (rotation.w * rotation.y + rotation.x * rotation.z),
@@ -103,6 +111,8 @@ try {
           speedKmh: Number(telemetry.speedKmh.toFixed(2)),
           signedForwardMps: Number(debug.forwardSpeed.toFixed(3)),
           worldVelocity: [Number(debug.velocityX.toFixed(3)), Number(debug.velocityY.toFixed(3)), Number(debug.velocityZ.toFixed(3))],
+          phaseVelocity: Object.fromEntries(Object.entries(phases).map(([key, v]) => [key, v.map(x => Number(x.toFixed(3)))])),
+          chassisMassKg: Number(sim.vehicle.body.mass().toFixed(2)),
           yawRadians: Number(yaw.toFixed(4)),
           yawRate: Number(angularVelocity.y.toFixed(4)),
           positionY: Number(debug.positionY.toFixed(3)),
@@ -113,6 +123,8 @@ try {
           wheelBrakes: [0, 1, 2, 3].map(i => Number((wheelController.wheelBrake(i) ?? 0).toFixed(3))),
           wheelContacts: [0, 1, 2, 3].map(i => wheelController.wheelIsInContact(i)),
           wheelForwardImpulses: [0, 1, 2, 3].map(i => Number((wheelController.wheelForwardImpulse(i) ?? 0).toFixed(4))),
+          wheelSuspensionForces: [0, 1, 2, 3].map(i => Number((wheelController.wheelSuspensionForce(i) ?? 0).toFixed(2))),
+          wheelSuspensionLengths: [0, 1, 2, 3].map(i => Number((wheelController.wheelSuspensionLength(i) ?? 0).toFixed(3))),
           wheelSideImpulses: [0, 1, 2, 3].map(i => Number((wheelController.wheelSideImpulse(i) ?? 0).toFixed(4))),
           wheelContactNormals: [0, 1, 2, 3].map(i => {
             const v = wheelController.wheelContactNormal(i);
