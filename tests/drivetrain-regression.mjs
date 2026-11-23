@@ -80,6 +80,7 @@ try {
     let upshiftNextTick = false;
     const milestones = new Set();
     const maxRpm = definition.maxRpm;
+    const recentSamples = [];
 
     try {
       for (let step = 0; step < Math.ceil(MAX_SIMULATION_SECONDS / dt); step++) {
@@ -90,6 +91,30 @@ try {
         upshiftNextTick = false;
 
         const { telemetry, debug } = sim.step(input);
+        const rotation = sim.vehicle.body.rotation();
+        const yaw = Math.atan2(
+          2 * (rotation.w * rotation.y + rotation.x * rotation.z),
+          1 - 2 * (rotation.y * rotation.y + rotation.z * rotation.z),
+        );
+        const angularVelocity = sim.vehicle.body.angvel();
+        const wheelController = sim.vehicle.wheelController;
+        const sample = {
+          step,
+          speedKmh: Number(telemetry.speedKmh.toFixed(2)),
+          signedForwardMps: Number(debug.forwardSpeed.toFixed(3)),
+          worldVelocity: [Number(debug.velocityX.toFixed(3)), Number(debug.velocityY.toFixed(3)), Number(debug.velocityZ.toFixed(3))],
+          yawRadians: Number(yaw.toFixed(4)),
+          yawRate: Number(angularVelocity.y.toFixed(4)),
+          positionY: Number(debug.positionY.toFixed(3)),
+          gear: telemetry.gear,
+          rpm: Number(telemetry.rpm.toFixed(0)),
+          appliedForwardForce: Number(debug.appliedForwardForce.toFixed(1)),
+          wheelEngineForces: [0, 1, 2, 3].map(i => Number((wheelController.wheelEngineForce(i) ?? 0).toFixed(1))),
+          wheelBrakes: [0, 1, 2, 3].map(i => Number((wheelController.wheelBrake(i) ?? 0).toFixed(3))),
+          wheelContacts: [0, 1, 2, 3].map(i => wheelController.wheelIsInContact(i)),
+        };
+        recentSamples.push(sample);
+        if (recentSamples.length > 10) recentSamples.shift();
         maxSpeedKmh = Math.max(maxSpeedKmh, telemetry.speedKmh);
         minSignedSpeed = Math.min(minSignedSpeed, debug.forwardSpeed);
         maxGear = Math.max(maxGear, telemetry.gear);
@@ -117,7 +142,7 @@ try {
         );
         assert(
           debug.forwardSpeed >= -0.4,
-          `${definition.name} (${manual ? 'manual' : 'auto'}): W-only run acquired reverse longitudinal speed ${debug.forwardSpeed.toFixed(3)} m/s at step ${step}`,
+          `${definition.name} (${manual ? 'manual' : 'auto'}): W-only run acquired reverse longitudinal speed. Diagnostics: ${JSON.stringify(recentSamples)}`,
         );
       }
 
