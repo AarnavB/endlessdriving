@@ -30,7 +30,7 @@ try {
 
   await RAPIER.init();
 
-  function createSimulation(definition, manual = false, dt = fixedDt) {
+  function createSimulation(definition, manual = false, dt = fixedDt, options = {}) {
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     world.timestep = dt;
     world.numSolverIterations = 8;
@@ -49,6 +49,7 @@ try {
     const vehicle = new VehicleController(world, scene, definition);
     vehicle.setManualTransmission(manual);
     vehicle.reset(new THREE.Vector3(0, 0.72, 0), true, new THREE.Vector3(0, 0, 1));
+    if (options.disableChassisCollider) vehicle.body.collider(0).setEnabled(false);
 
     return {
       world,
@@ -58,6 +59,7 @@ try {
         const before = vehicle.body.linvel();
         vehicle.update(dt, input);
         const afterController = vehicle.body.linvel();
+        if (options.clearForcesBeforeWorldStep) vehicle.body.resetForces(true);
         world.step();
         const afterWorld = vehicle.body.linvel();
         vehicle.syncVisual();
@@ -194,6 +196,36 @@ try {
       sim.dispose();
     }
   }
+
+  // Isolate possible chassis-hull contacts and accumulated chassis forces.
+  const probes = [];
+  for (const options of [
+    { disableChassisCollider: true },
+    { clearForcesBeforeWorldStep: true },
+    { disableChassisCollider: true, clearForcesBeforeWorldStep: true },
+  ]) {
+    const sim = createSimulation(VEHICLE_CATALOGUE[0], false, fixedDt, options);
+    let minimumSignedSpeedMps = 0;
+    let maximumSpeedKmh = 0;
+    let reverseAtStep = null;
+    try {
+      for (let i = 0; i < 360; i++) {
+        const { telemetry, debug } = sim.step(INPUT);
+        minimumSignedSpeedMps = Math.min(minimumSignedSpeedMps, debug.forwardSpeed);
+        maximumSpeedKmh = Math.max(maximumSpeedKmh, telemetry.speedKmh);
+        if (reverseAtStep === null && debug.forwardSpeed < -0.4) reverseAtStep = i;
+      }
+      probes.push({
+        options,
+        minimumSignedSpeedMps: Number(minimumSignedSpeedMps.toFixed(3)),
+        maximumSpeedKmh: Number(maximumSpeedKmh.toFixed(2)),
+        reverseAtStep,
+      });
+    } finally {
+      sim.dispose();
+    }
+  }
+  console.log('DRIVETRAIN_ISOLATION_PROBES', JSON.stringify(probes));
 
   const results = [];
   for (const definition of VEHICLE_CATALOGUE) {
