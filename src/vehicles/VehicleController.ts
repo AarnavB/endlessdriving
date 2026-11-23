@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { InputState, VehicleDebugTelemetry, VehicleTelemetry } from '../types';
-import { createSportsCarVisual } from './vehicleVisual';
+import { createSportsCarVisual, type VehicleWheelVisual } from './vehicleVisual';
 import type { VehicleDefinition } from './VehicleDefinitions';
 
 export type ShiftEventType = 'upshift' | 'downshift' | 'neutral' | 'engage' | 'reverse';
@@ -51,7 +51,7 @@ export class VehicleController {
   readonly visual: THREE.Group;
   private readonly wheelController: RAPIER.DynamicRayCastVehicleController;
   readonly definition: VehicleDefinition;
-  private readonly wheelMeshes: THREE.Object3D[];
+  private readonly wheelMeshes: VehicleWheelVisual[];
   private gear = 1;
   private rpm: number;
   private speedMps = 0;
@@ -205,54 +205,64 @@ export class VehicleController {
 
     const profile = this.definition.physics;
     const idleRpm = Math.min(1200, Math.max(700, this.definition.maxRpm * 0.12));
-    const maxSpeedMps = profile.maxSpeedKmh / 3.6;
-    const gearRatio = this.gear === 0 ? 0 : (profile.gearRatios[this.gear - 1] ?? profile.gearRatios[0]);
-    const speedRatio = THREE.MathUtils.clamp(this.speedMps / maxSpeedMps, 0, 1);
-    // Preserve usable power at high speed; engine output should fall with the
-    // torque curve and gearing, not an arbitrary 32% power cliff.
-    const speedFade = 1 - Math.pow(speedRatio, 1.5) * 0.12;
-    const hybridAssist = profile.hybridAssist
-      ? profile.hybridAssist - Math.min(profile.hybridAssist - 1, speedRatio * (profile.hybridAssist - 1))
-      : 1;
-
-    const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
     const coupledGear = reverseMode ? 1 : this.gear;
-    const rawCoupledRpm = this.gear === 0
-      ? idleRpm
-      : this.calculateRawCoupledRpm(coupledGear, Math.abs(signedSpeed));
-    const clutchEngagement = THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.35, 4.2);
-    const coupledTorqueRpm = THREE.MathUtils.clamp(rawCoupledRpm, idleRpm, this.definition.maxRpm);
-    const torqueRpm = this.gear === 0
-      ? idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.72
-      : THREE.MathUtils.lerp(launchRpm, coupledTorqueRpm, clutchEngagement);
-    const torqueFactor = this.getTorqueFactor(torqueRpm);
+    const gearRatio = coupledGear === 0
+      ? 0
+      : (profile.gearRatios[coupledGear - 1] ?? profile.gearRatios[0]);
+    const totalReduction = gearRatio * profile.finalDrive * profile.transferDrive;
 
-    // Convert crankshaft torque to tractive force at the driven tyres:
-    // F = engine torque × gear ratio × final drive × transfer ratio / tyre radius.
-    // maxDriveForce is a tyre/traction ceiling, not a substitute for gear ratios.
-    const drivelineEfficiency = 0.9;
-    const wheelTorqueNm = this.definition.torqueNm
-      * torqueFactor
-      * gearRatio
-      * profile.finalDrive
-      * profile.transferDrive
-      * drivelineEfficiency;
+    // Model clutch slip during launch, then lock engine speed to driven-wheel
+    // RPM through the selected gear, final drive and transfer reduction.
+    const wheelRpm = this.speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
+    const rawCoupledRpm = coupledGear === 0 ? idleRpm : wheelRpm * totalReduction;
+    const clutchBlend = this.gear === 0
+      ? 0
+      : THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.35, 4.2);
+    const clutchEngagement = this.gear === 0 ? 0 : THREE.MathUtils.lerp(0.34, 1, clutchBlend);
+    const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
+    const freeRevTarget = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.72;
+    const coupledTargetRpm = THREE.MathUtils.clamp(rawCoupledRpm, idleRpm, this.definition.maxRpm);
+    const targetRpm = this.gear === 0
+      ? freeRevTarget
+      : THREE.MathUtils.lerp(launchRpm, coupledTargetRpm, clutchBlend);
+
+    // Once the clutch is locked, RPM is an exact consequence of wheel speed.
+    // During launch and neutral, the engine spools toward its free/coupled target.
+    this.rpm = clutchBlend >= 0.999 && this.gear !== 0
+      ? coupledTargetRpm
+      : THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 14 : 9, safeDt);
+
+    const torqueRpm = THREE.MathUtils.clamp(this.rpm, idleRpm, this.definition.maxRpm);
+    const torqueFactor = this.getTorqueFactor(torqueRpm);
+    const drivelineEfficiency = 0.90;
+    const crankshaftTorqueNm = this.definition.torqueNm * torqueFactor;
+    const angularSpeedRadPerSecond = Math.max(1, torqueRpm * Math.PI * 2 / 60);
+    const ratedPowerW = this.definition.powerHp * 745.699872;
+    const powerLimitedTorqueNm = ratedPowerW / angularSpeedRadPerSecond;
+    const usableCrankTorqueNm = Math.min(crankshaftTorqueNm, powerLimitedTorqueNm);
+    const wheelTorqueNm = usableCrankTorqueNm
+      * totalReduction
+      * drivelineEfficiency
+      * clutchEngagement
+      * (profile.hybridAssist ?? 1);
     const requestedWheelForce = wheelTorqueNm / profile.wheelRadiusM;
-    // Soft electronic rev limiter for manual transmission; automatic mode
-    // normally upshifts before reaching this range.
+
+    // Limit torque at the ratio-derived redline, without imposing a vehicle
+    // speed cap. Coasting inertia can carry speed independently of propulsion.
+    const limiterRpm = Math.max(this.rpm, rawCoupledRpm);
     const revLimiter = this.gear === 0
       ? 1
       : 1 - THREE.MathUtils.smoothstep(
         this.definition.maxRpm * 0.985,
         this.definition.maxRpm,
-        rawCoupledRpm,
+        limiterRpm,
       );
     const engineForce = this.gear === 0
       ? 0
       : Math.max(
         0,
         Math.min(profile.maxDriveForce, requestedWheelForce)
-          * this.driveThrottle * speedFade * hybridAssist * revLimiter,
+          * this.driveThrottle * revLimiter,
       );
 
     const drivenWheels = this.definition.drivetrain.toLowerCase().includes('all-wheel')
@@ -340,9 +350,8 @@ export class VehicleController {
     // prevents the car coasting indefinitely when the engine is off-load.
     if (this.speedMps > 0.05) {
       const airDensity = 1.225;
-      const dragArea = 0.76; // Cd × frontal area, representative supercar value.
-      const aerodynamicDrag = 0.5 * airDensity * dragArea * this.speedMps * this.speedMps;
-      const rollingResistance = profile.massKg * 9.81 * 0.012;
+      const aerodynamicDrag = 0.5 * airDensity * profile.dragAreaM2 * this.speedMps * this.speedMps;
+      const rollingResistance = profile.massKg * 9.81 * profile.rollingResistanceCoefficient;
       const stoppingForceLimit = profile.massKg * this.speedMps / safeDt * 0.8;
       const roadLoad = Math.min(aerodynamicDrag + rollingResistance, stoppingForceLimit);
       const dragScale = -roadLoad / this.speedMps;
@@ -374,15 +383,6 @@ export class VehicleController {
     } else if (!reverseMode && signedSpeed >= -0.1) {
       this.reverseAudioLatched = false;
     }
-
-    const targetRpm = this.gear === 0
-      ? idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.72
-      : THREE.MathUtils.lerp(
-        launchRpm,
-        coupledTorqueRpm,
-        clutchEngagement,
-      );
-    this.rpm = THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 9 : 6, safeDt);
 
     return this.getTelemetry();
   }
@@ -487,9 +487,14 @@ export class VehicleController {
       const wheel = this.wheelMeshes[i];
       const suspensionLength = this.wheelController.wheelSuspensionLength(i) ?? WHEEL_REST_LENGTH;
       const rotation = this.wheelController.wheelRotation(i);
-      wheel.position.y = WHEEL_CONNECTION_Y - suspensionLength;
-      if (rotation !== null && Number.isFinite(rotation)) wheel.rotation.x = rotation;
-      wheel.rotation.y = i === 1 || i === 3 ? (this.wheelController.wheelSteering(i) ?? 0) : 0;
+      wheel.steeringPivot.position.y = WHEEL_CONNECTION_Y - suspensionLength;
+      wheel.steeringPivot.rotation.y = i === 1 || i === 3
+        ? (this.wheelController.wheelSteering(i) ?? 0)
+        : 0;
+      if (rotation !== null && Number.isFinite(rotation)) {
+        // Rapier's wheel angle is positive for forward travel along local +Z.
+        wheel.rolling.rotation.x = rotation;
+      }
     }
   }
 
@@ -550,7 +555,10 @@ export class VehicleController {
     this.reverseAudioLatched = false;
     this.handbrake = false;
     this.lastInput = { ...NEUTRAL_INPUT };
-    for (const wheel of this.wheelMeshes) wheel.rotation.set(0, 0, 0);
+    for (const wheel of this.wheelMeshes) {
+      wheel.steeringPivot.rotation.set(0, 0, 0);
+      wheel.rolling.rotation.set(0, 0, 0);
+    }
     for (let i = 0; i < 4; i++) {
       this.wheelController.setWheelEngineForce(i, 0);
       this.wheelController.setWheelBrake(i, 0);

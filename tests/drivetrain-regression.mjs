@@ -275,17 +275,166 @@ try {
   }
 
   function runSteeringRegression(definition) {
-    const sim = createSimulation(definition, false, FIXED_DT);
-    let maximumSpeedKmh = 0;
-    try {
-      for (let i = 0; i < 600; i++) {
-        const { telemetry, debug } = sim.step({ ...FORWARD_INPUT, steer: 0.15 });
-        maximumSpeedKmh = Math.max(maximumSpeedKmh, telemetry.speedKmh);
-        assert(debug.forwardSpeed >= -0.4, 'F40 acquired reverse longitudinal speed while steering under throttle');
-        assert(debug.appliedForwardForce >= -1e-6, 'Steering caused negative forward propulsion');
+    function runDirection(steer) {
+      const sim = createSimulation(definition, false, FIXED_DT);
+      let previousYaw = Math.atan2(sim.vehicle.getForward().x, sim.vehicle.getForward().z);
+      let accumulatedYaw = 0;
+      try {
+        sim.step({ ...NEUTRAL_INPUT, steer });
+        const controller = sim.vehicle.wheelController;
+        const leftFront = controller.wheelSteering(1) ?? 0;
+        const rightFront = controller.wheelSteering(3) ?? 0;
+        assert(Math.sign(leftFront) === Math.sign(steer), 'Left-front steering angle has the wrong sign');
+        assert(Math.sign(rightFront) === Math.sign(steer), 'Right-front steering angle has the wrong sign');
+        assert(Math.abs(controller.wheelSteering(0) ?? 0) < 1e-6, 'Left-rear wheel received a steering angle');
+        assert(Math.abs(controller.wheelSteering(2) ?? 0) < 1e-6, 'Right-rear wheel received a steering angle');
+        assert(
+          Math.abs(sim.vehicle.wheelMeshes[1].steeringPivot.rotation.y - leftFront) < 1e-4,
+          'Rendered left-front steering pivot disagrees with Rapier',
+        );
+
+        for (let i = 0; i < 240; i++) {
+          sim.step({ ...FORWARD_INPUT, steer });
+          const forward = sim.vehicle.getForward();
+          const yaw = Math.atan2(forward.x, forward.z);
+          let delta = yaw - previousYaw;
+          if (delta > Math.PI) delta -= Math.PI * 2;
+          if (delta < -Math.PI) delta += Math.PI * 2;
+          accumulatedYaw += delta;
+          previousYaw = yaw;
+        }
+        assert(
+          accumulatedYaw * steer > 0.015,
+          `Chassis yaw sign disagrees with steering input (${steer} input, ${accumulatedYaw.toFixed(4)} rad yaw)`,
+        );
+
+        const beforeCentre = Math.abs(controller.wheelSteering(1) ?? 0);
+        for (let i = 0; i < 90; i++) sim.step(NEUTRAL_INPUT);
+        const afterCentre = Math.abs(controller.wheelSteering(1) ?? 0);
+        assert(afterCentre < Math.max(0.002, beforeCentre * 0.15), 'Steering did not smoothly return toward centre');
+        return {
+          direction: steer < 0 ? 'left' : 'right',
+          accumulatedYawRadians: Number(accumulatedYaw.toFixed(4)),
+          initialFrontAnglesRadians: [Number(leftFront.toFixed(4)), Number(rightFront.toFixed(4))],
+          centreResidualRadians: Number(afterCentre.toFixed(5)),
+          result: 'PASS',
+        };
+      } finally {
+        sim.dispose();
       }
-      assert(maximumSpeedKmh >= 50, 'Steering test failed to pass through 50 km/h');
-      return { maximumSpeedKmh: Number(maximumSpeedKmh.toFixed(1)), result: 'PASS' };
+    }
+    return { vehicle: definition.name, left: runDirection(-0.65), right: runDirection(0.65), result: 'PASS' };
+  }
+
+  function runWheelPhysicsRegression(definition) {
+    const sim = createSimulation(definition, false, FIXED_DT);
+    try {
+      for (let i = 0; i < 180; i++) sim.step(NEUTRAL_INPUT);
+      const controller = sim.vehicle.wheelController;
+      const stationaryWheels = [];
+      for (let i = 0; i < 4; i++) {
+        assert(controller.wheelIsInContact(i), `${definition.name}: wheel ${i} lost contact on a flat road`);
+        const normal = controller.wheelContactNormal(i);
+        assert(normal && normal.y > 0.8, `${definition.name}: wheel ${i} has an invalid contact normal`);
+        const suspensionLength = controller.wheelSuspensionLength(i);
+        assert(
+          Number.isFinite(suspensionLength) && suspensionLength >= 0 && suspensionLength <= 0.5,
+          `${definition.name}: wheel ${i} suspension is out of bounds (${suspensionLength})`,
+        );
+        const visualWheel = sim.vehicle.wheelMeshes[i];
+        assert(
+          Math.abs(visualWheel.steeringPivot.position.y - (-0.16 - suspensionLength)) < 1e-4,
+          `${definition.name}: wheel ${i} visual position is detached from suspension state`,
+        );
+        stationaryWheels.push({ index: i, suspensionLength: Number(suspensionLength.toFixed(4)) });
+      }
+
+      for (let i = 0; i < 90; i++) sim.step(FORWARD_INPUT);
+      const rolling = [];
+      for (let i = 0; i < 4; i++) {
+        const angle = controller.wheelRotation(i);
+        assert(Number.isFinite(angle), `${definition.name}: wheel ${i} rotation is not finite`);
+        assert(
+          Math.abs(sim.vehicle.wheelMeshes[i].rolling.rotation.x - angle) < 1e-4,
+          `${definition.name}: wheel ${i} render rotation is not synchronised`,
+        );
+        rolling.push(Number(angle.toFixed(4)));
+      }
+      sim.step({ ...NEUTRAL_INPUT, steer: -0.6 });
+      for (const i of [1, 3]) {
+        const angle = controller.wheelSteering(i) ?? 0;
+        assert(angle < 0, `${definition.name}: left input did not turn front wheel ${i} left`);
+        assert(
+          Math.abs(sim.vehicle.wheelMeshes[i].steeringPivot.rotation.y - angle) < 1e-4,
+          `${definition.name}: steering pivot ${i} is not synchronised`,
+        );
+      }
+      for (const i of [0, 2]) {
+        assert(Math.abs(controller.wheelSteering(i) ?? 0) < 1e-6, `${definition.name}: rear wheel ${i} steered`);
+      }
+      return {
+        vehicle: definition.name,
+        stationaryWheels,
+        forwardWheelAnglesRadians: rolling,
+        frontSteeringSign: 'left input -> negative angle',
+        result: 'PASS',
+      };
+    } finally {
+      sim.dispose();
+    }
+  }
+
+  function runPerGearMechanicalChecks(definition) {
+    const sim = createSimulation(definition, true, FIXED_DT);
+    const profile = definition.physics;
+    const redlineSpeeds = profile.gearRatios.map((ratio, index) => {
+      const totalReduction = ratio * profile.finalDrive * profile.transferDrive;
+      const wheelRpmAtRedline = definition.maxRpm / totalReduction;
+      const speedMps = wheelRpmAtRedline / 60 * 2 * Math.PI * profile.wheelRadiusM;
+      return { gear: index + 1, ratio, redlineSpeedKmh: speedMps * 3.6 };
+    });
+    try {
+      for (let i = 0; i < 900; i++) {
+        const { telemetry, debug } = sim.step(FORWARD_INPUT);
+        assert.equal(telemetry.gear, 1, `${definition.name}: manual first gear changed without shift input`);
+        assert(telemetry.rpm <= definition.maxRpm * 1.02, `${definition.name}: first-gear rev limiter failed`);
+        assert(debug.appliedForwardForce >= -1e-6, `${definition.name}: first gear generated negative propulsion`);
+        if (telemetry.speedMps > 6 && telemetry.rpm < definition.maxRpm * 0.96) {
+          const wheelRpm = telemetry.speedMps / (2 * Math.PI * profile.wheelRadiusM) * 60;
+          const expectedRpm = wheelRpm * profile.gearRatios[0] * profile.finalDrive * profile.transferDrive;
+          assert(
+            Math.abs(telemetry.rpm - expectedRpm) < definition.maxRpm * 0.04,
+            `${definition.name}: engine RPM disconnected from driven-wheel RPM in first gear`,
+          );
+        }
+      }
+      const telemetry = sim.vehicle.getTelemetry();
+      const firstGearRedlineKmh = redlineSpeeds[0].redlineSpeedKmh;
+      assert(
+        telemetry.speedKmh <= firstGearRedlineKmh * 1.12 + 3,
+        `${definition.name}: first gear exceeded ratio-derived redline speed (${telemetry.speedKmh.toFixed(1)} > ${firstGearRedlineKmh.toFixed(1)} km/h)`,
+      );
+      assert(
+        telemetry.rpm >= definition.maxRpm * 0.88,
+        `${definition.name}: full-throttle first gear did not approach engine redline`,
+      );
+      for (let i = 1; i < redlineSpeeds.length; i++) {
+        assert(
+          redlineSpeeds[i].redlineSpeedKmh > redlineSpeeds[i - 1].redlineSpeedKmh,
+          `${definition.name}: gear ${i + 1} has no higher redline speed than gear ${i}`,
+        );
+      }
+      return {
+        vehicle: definition.name,
+        manualGearHeld: 1,
+        calculatedRedlineSpeedsKmh: redlineSpeeds.map((entry) => ({
+          gear: entry.gear,
+          speed: Number(entry.redlineSpeedKmh.toFixed(1)),
+        })),
+        measuredFirstGearSpeedKmh: Number(telemetry.speedKmh.toFixed(1)),
+        finalEngineRpm: Math.round(telemetry.rpm),
+        result: 'PASS',
+      };
     } finally {
       sim.dispose();
     }
@@ -298,7 +447,12 @@ try {
   }
 
   const defaultVehicle = VEHICLE_CATALOGUE[0];
-  const scenarioRuns = [runCoastBrakeAndReverse(defaultVehicle), runSteeringRegression(defaultVehicle)];
+  const scenarioRuns = [
+    runCoastBrakeAndReverse(defaultVehicle),
+    runSteeringRegression(defaultVehicle),
+    runWheelPhysicsRegression(defaultVehicle),
+  ];
+  const perGearRuns = VEHICLE_CATALOGUE.map(runPerGearMechanicalChecks);
 
   const timestepRuns = [];
   for (const dt of [1 / 30, 1 / 60, 1 / 120]) {
@@ -370,6 +524,8 @@ try {
       scenarioRunsPassed: scenarioRuns.length,
       scenarioRunsFailed: 0,
       timestepRunsPassed: timestepRuns.length,
+      perGearRunsPassed: perGearRuns.length,
+      perGearRunsFailed: 0,
       timestepRunsFailed: 0,
     },
   }, null, 2));

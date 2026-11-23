@@ -23,11 +23,21 @@ export class InputManager {
   }
 
   getState(): InputState {
+    const keyboardSteer = Number(this.keys.has('KeyD') || this.keys.has('ArrowRight'))
+      - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft'));
+    let gamepadSteer = 0;
+    if (typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function') {
+      const gamepad = Array.from(navigator.getGamepads()).find((candidate) => candidate?.connected);
+      const axis = gamepad?.axes[0] ?? 0;
+      const deadzone = 0.12;
+      if (axis > deadzone) gamepadSteer = (axis - deadzone) / (1 - deadzone);
+      else if (axis < -deadzone) gamepadSteer = (axis + deadzone) / (1 - deadzone);
+    }
     return {
       throttle: this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0,
       brake: this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0,
-      steer: Number(this.keys.has('KeyD') || this.keys.has('ArrowRight'))
-        - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft')),
+      // Standard gamepad axis 0: negative = left, positive = right.
+      steer: Math.abs(gamepadSteer) > 0 ? gamepadSteer : keyboardSteer,
       handbrake: this.keys.has('Space'),
       shiftUpPressed: this.justPressed.has('KeyE'),
       shiftDownPressed: this.justPressed.has('KeyQ'),

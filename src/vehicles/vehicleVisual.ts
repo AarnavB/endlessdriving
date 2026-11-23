@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { VehicleDefinition, VehicleVisualConfig } from './VehicleDefinitions';
 
-type VehicleVisualParts = { root: THREE.Group; wheels: THREE.Object3D[] };
+export type VehicleWheelVisual = { steeringPivot: THREE.Group; rolling: THREE.Group };
+type VehicleVisualParts = { root: THREE.Group; wheels: VehicleWheelVisual[] };
 
 function addPolygon(
   parent: THREE.Group,
@@ -150,37 +151,42 @@ function addWheelAssembly(
   alloy: THREE.Material,
   brake: THREE.Material,
   caliperMaterial: THREE.Material,
-): THREE.Object3D[] {
-  const wheels: THREE.Object3D[] = [];
+): VehicleWheelVisual[] {
+  const wheels: VehicleWheelVisual[] = [];
   const radius = definition.physics.wheelRadiusM;
   for (const side of [-1, 1]) {
     for (const z of [-config.wheelBase * 0.5, config.wheelBase * 0.5]) {
       const x = side * config.wheelTrack * 0.5;
-      const assembly = new THREE.Group();
-      assembly.position.set(x, 0.02, z);
+      // The pivot steers; its child spins independently around the axle.
+      const steeringPivot = new THREE.Group();
+      steeringPivot.position.set(x, 0.02, z);
+      const rolling = new THREE.Group();
+      steeringPivot.add(rolling);
+
       const tyre = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 0.27, 40, 1), rubber);
       tyre.rotation.z = Math.PI / 2;
       tyre.castShadow = true;
-      assembly.add(tyre);
+      rolling.add(tyre);
       const disc = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.67, radius * 0.67, 0.045, 32), brake);
       disc.rotation.z = Math.PI / 2;
       disc.position.x = side * 0.075;
-      assembly.add(disc);
+      rolling.add(disc);
       const hub = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.23, radius * 0.23, 0.282, 24), alloy);
       hub.rotation.z = Math.PI / 2;
-      assembly.add(hub);
+      rolling.add(hub);
       for (let spoke = 0; spoke < 10; spoke++) {
         const spokeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, radius * 1.08, 0.045), alloy);
         spokeMesh.position.x = -side * 0.143;
         spokeMesh.rotation.x = spoke * Math.PI / 5;
-        assembly.add(spokeMesh);
+        rolling.add(spokeMesh);
       }
       const caliper = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.23, 0.13), caliperMaterial);
       caliper.position.set(-side * 0.105, 0.08, radius * 0.42);
-      assembly.add(caliper);
-      root.add(assembly);
-      wheels.push(assembly);
+      rolling.add(caliper);
+      root.add(steeringPivot);
+      wheels.push({ steeringPivot, rolling });
 
+      // Wheel arches belong to the body and remain stationary.
       const archPoints: THREE.Vector3[] = [];
       for (let i = 0; i <= 24; i++) {
         const angle = Math.PI * i / 24;
@@ -191,7 +197,6 @@ function addWheelAssembly(
   }
   return wheels;
 }
-
 function addFrontAndRearDetails(
   root: THREE.Group,
   config: VehicleVisualConfig,
