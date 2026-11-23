@@ -253,9 +253,9 @@ export class VehicleController {
     const revLimiter = this.gear === 0
       ? 1
       : 1 - THREE.MathUtils.smoothstep(
+        limiterRpm,
         this.definition.maxRpm * 0.985,
         this.definition.maxRpm,
-        limiterRpm,
       );
     const engineForce = this.gear === 0
       ? 0
