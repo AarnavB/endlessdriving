@@ -58,10 +58,6 @@ function smoothstep(value: number): number {
   const t = THREE.MathUtils.clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
 }
-function angleDelta(from: number, to: number): number {
-  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
-}
-
 /** Fixed-size AI pool following graph edges, lanes and protected signal phases. */
 export class TrafficSystem {
   private readonly vehicles: TrafficVehicle[] = [];
