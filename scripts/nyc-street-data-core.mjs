@@ -176,7 +176,7 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
     }
     const item = result.feature;
     if (seenIds.has(item.id)) {
-      rejected.duplicate-source-id = (rejected.duplicate-source-id ?? 0) + 1;
+      rejected['duplicate-source-id'] = (rejected['duplicate-source-id'] ?? 0) + 1;
       continue;
     }
     seenIds.add(item.id);
