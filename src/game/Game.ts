@@ -96,7 +96,9 @@ export class Game {
     this.ui.onRestart(() => this.restartDrive());
     this.ui.onGearSelect((selection) => {
       if (!this.hasStartedDriving || this.paused) return;
-      this.vehicle.selectGear(selection === 'drive' ? 1 : selection);
+      if (selection === 'drive') this.vehicle.selectGear(1);
+      else if (selection === 0) this.vehicle.toggleNeutral();
+      else this.vehicle.selectGear(selection);
       for (const event of this.vehicle.drainShiftEvents()) this.audio.playShiftEvent(event);
     });
     this.ui.onTransmissionToggle(() => this.toggleTransmission());
