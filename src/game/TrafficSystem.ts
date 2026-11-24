@@ -82,6 +82,11 @@ export class TrafficSystem {
     color: 0x10161c, metalness: 0.12, roughness: 0.72,
   });
   private readonly nextTranslation = { x: 0, y: 0.49, z: 0 };
+  private readonly nextRotation = new THREE.Quaternion();
+  private readonly orientationMatrix = new THREE.Matrix4();
+  private readonly orientationRight = new THREE.Vector3();
+  private readonly orientationUp = new THREE.Vector3();
+  private readonly orientationForward = new THREE.Vector3();
   private readonly chassisGeometry = new THREE.BoxGeometry(1.72, 0.52, VEHICLE_LENGTH_M);
   private readonly roofGeometry = new THREE.BoxGeometry(1.38, 0.52, 1.82);
   private readonly wheelGeometry = new THREE.CylinderGeometry(0.31, 0.31, 0.22, 10);
@@ -511,10 +516,22 @@ export class TrafficSystem {
     this.nextTranslation.y = pose.position.y + 0.49 - this.originOffset.y;
     this.nextTranslation.z = pose.position.z - this.originOffset.z;
     vehicle.body.setNextKinematicTranslation(this.nextTranslation);
-    const halfYaw = pose.yaw * 0.5;
+    const rotation = this.getPoseRotation(pose);
     vehicle.body.setNextKinematicRotation({
-      x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw),
+      x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w,
     });
+  }
+
+  private getPoseRotation(pose: CityLanePose): THREE.Quaternion {
+    this.orientationRight.set(pose.right.x, pose.right.y, pose.right.z).normalize();
+    this.orientationUp.set(pose.up.x, pose.up.y, pose.up.z).normalize();
+    this.orientationForward.set(pose.tangent.x, pose.tangent.y, pose.tangent.z).normalize();
+    this.orientationMatrix.makeBasis(
+      this.orientationRight,
+      this.orientationUp,
+      this.orientationForward,
+    );
+    return this.nextRotation.setFromRotationMatrix(this.orientationMatrix);
   }
 
   private getVehiclePose(vehicle: TrafficVehicle): CityLanePose {
@@ -584,11 +601,11 @@ export class TrafficSystem {
     const x = pose.position.x - this.originOffset.x;
     const y = pose.position.y + 0.49 - this.originOffset.y;
     const z = pose.position.z - this.originOffset.z;
-    const halfYaw = pose.yaw * 0.5;
+    const rotation = this.getPoseRotation(pose);
     vehicle.body.setTranslation({ x, y, z }, true);
-    vehicle.body.setRotation({ x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) }, true);
+    vehicle.body.setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w }, true);
     vehicle.visual.position.set(x, y, z);
-    vehicle.visual.rotation.y = pose.yaw;
+    vehicle.visual.quaternion.copy(rotation);
   }
 
   private createVehicleVisual(bodyMaterial: THREE.Material): THREE.Group {
