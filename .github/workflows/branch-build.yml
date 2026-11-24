@@ -36,5 +36,8 @@ jobs:
       - name: Run NYC geospatial regression simulation
         run: npm run test:nyc-geo
 
+      - name: Run NYC district parcel and spatial placement regression
+        run: npm run test:city-urban
+
       - name: Run city graph, streaming and traffic integration regression
         run: npm run test:city-routing
