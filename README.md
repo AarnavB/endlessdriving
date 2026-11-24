@@ -78,3 +78,8 @@ For the technical architecture, folder tree and staged dependencies, see [`PROJE
 - `src/world/` — seeded road path, environment profiles, chunk streaming, scenery, road markings, guardrails, and Rapier road colliders
 - `src/audio/` — synthesized engine and wind audio
 - `src/ui/` — menus, analogue instrument cluster, diagnostics and saved preferences
+
+
+## NYC world rebuild
+
+The `feat/nyc-world-rebuild` branch adds the data-backed geospatial foundation, streamed NYC building/road chunks, Rapier collision, and optional Google Photorealistic 3D Tiles. See [NYC_WORLD.md](./NYC_WORLD.md) for data provenance, limitations, API setup, and remaining work. Configure `VITE_GOOGLE_MAPS_API_KEY` only as a restricted browser key; never commit an actual key.

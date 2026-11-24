@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/vehicle-movement
+      - feat/nyc-world-rebuild
   workflow_dispatch:
 
 permissions:
@@ -31,3 +32,9 @@ jobs:
 
       - name: Run Rapier drivetrain regression simulation
         run: npm run test:drivetrain
+
+      - name: Run NYC geospatial regression simulation
+        run: npm run test:nyc-geo
+
+      - name: Run city graph, streaming and traffic integration regression
+        run: npm run test:city-routing
