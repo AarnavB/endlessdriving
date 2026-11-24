@@ -6,6 +6,7 @@ import { TrafficSystem } from './TrafficSystem';
 import { NYCCityChunkManager } from '../world/nyc/NYCCityChunkManager';
 import { CityRoadGraph } from '../world/nyc/CityRoadGraph';
 import { GooglePhotorealisticTiles } from '../world/nyc/GooglePhotorealisticTiles';
+import { NYCEnvironmentLighting } from '../world/nyc/NYCEnvironmentLighting';
 import { VehicleController } from '../vehicles/VehicleController';
 import { getVehicleDefinition, loadSelectedVehicleId, saveSelectedVehicleId } from '../vehicles/VehicleDefinitions';
 import { GaragePreview } from '../vehicles/GaragePreview';
@@ -25,6 +26,8 @@ export class Game {
   private readonly garagePreview: GaragePreview;
   private readonly debugOverlay: PhysicsDebugOverlay;
   private readonly trafficPlayerPosition = new THREE.Vector3();
+  private readonly sunFocusPosition = new THREE.Vector3();
+  private readonly sunTarget = new THREE.Object3D();
   private readonly clock = new THREE.Clock();
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
@@ -48,8 +51,9 @@ export class Game {
   private frameCount = 0;
   private fps = 0;
   private dayPhase = 0.38;
-  private readonly hemi = new THREE.HemisphereLight(0xdbe9f2, 0x373d43, 1.55);
-  private readonly sun = new THREE.DirectionalLight(0xffe3bd, 2.15);
+  private readonly hemi = new THREE.HemisphereLight(0xdbe9f2, 0x373d43, 0.85);
+  private readonly sun = new THREE.DirectionalLight(0xffe3bd, 3.0);
+  private readonly environmentLighting: NYCEnvironmentLighting;
 
   private constructor(canvas: HTMLCanvasElement, uiRoot: HTMLElement, settings: GameSettings) {
     this.manualTransmission = settings.transmission === 'manual';
@@ -66,10 +70,13 @@ export class Game {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
+    this.environmentLighting = new NYCEnvironmentLighting(this.renderer, this.scene);
     this.scene.add(this.hemi);
+    this.sun.target = this.sunTarget;
+    this.scene.add(this.sunTarget);
     this.sun.position.set(-55, 105, 38);
     this.sun.castShadow = settings.graphics === 'high';
-    const shadowResolution = 768;
+    const shadowResolution = settings.graphics === 'high' ? 2048 : 1024;
     this.sun.shadow.mapSize.set(shadowResolution, shadowResolution);
     this.sun.shadow.camera.left = -110;
     this.sun.shadow.camera.right = 110;
@@ -78,6 +85,8 @@ export class Game {
     this.sun.shadow.camera.near = 1;
     this.sun.shadow.camera.far = 260;
     this.sun.shadow.bias = -0.00025;
+    this.sun.shadow.normalBias = 0.035;
+    this.sun.shadow.radius = 3.5;
     this.scene.add(this.sun);
 
     this.audio.setEngineVolume(settings.engineVolume);
@@ -157,6 +166,7 @@ export class Game {
     this.traffic.dispose();
     this.worldScene.dispose();
     this.googleTiles?.dispose();
+    this.environmentLighting.dispose(this.scene);
     this.renderer.dispose();
     this.physics.free();
   }
@@ -361,12 +371,17 @@ export class Game {
     this.dayPhase = (this.dayPhase + frameDt * 0.00048) % 1;
     const night = THREE.MathUtils.clamp((Math.cos(this.dayPhase * Math.PI * 2) + 0.25) * 0.72, 0, 1);
     this.worldScene.setNightBlend(night);
-    this.sun.intensity = THREE.MathUtils.lerp(0.25, 2.15, 1 - night);
-    this.hemi.intensity = THREE.MathUtils.lerp(0.35, 1.55, 1 - night);
+    this.sun.intensity = THREE.MathUtils.lerp(0.04, 3.0, 1 - night);
+    this.hemi.intensity = THREE.MathUtils.lerp(0.12, 0.85, 1 - night);
+    // Keep the directional-light shadow frustum centred on the active vehicle.
+    // Without this anchor, the fixed 220 m shadow camera loses the player as
+    // the endless world streams away from the origin.
+    this.vehicle.getPosition(this.sunFocusPosition);
+    this.sunTarget.position.copy(this.sunFocusPosition);
     this.sun.position.set(
-      Math.cos(this.dayPhase * Math.PI * 2) * 110,
-      22 + Math.sin(this.dayPhase * Math.PI * 2) * 90,
-      38,
+      this.sunFocusPosition.x + Math.cos(this.dayPhase * Math.PI * 2) * 125,
+      this.sunFocusPosition.y + 22 + Math.sin(this.dayPhase * Math.PI * 2) * 90,
+      this.sunFocusPosition.z + 38,
     );
   }
 
@@ -454,7 +469,7 @@ export class Game {
     const high = settings.graphics === 'high';
     this.renderer.shadowMap.enabled = high;
     this.sun.castShadow = high;
-    const shadowResolution = 768;
+    const shadowResolution = high ? 2048 : 1024;
     this.sun.shadow.mapSize.set(shadowResolution, shadowResolution);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, low ? 0.85 : high ? 1.25 : 1));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
