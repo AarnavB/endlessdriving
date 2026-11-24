@@ -348,12 +348,28 @@ try {
       function handbrakeSpeed(active) {
         const brakeSim = createSimulation(definition, true, FIXED_DT);
         try {
-          for (let i = 0; i < 120; i++) brakeSim.step(NEUTRAL_INPUT);
-          brakeSim.vehicle.body.setLinvel({ x: 0, y: 0, z: 20 }, true);
+          // Establish real wheel rotation through the tyre controller before
+          // comparing handbrake response; teleporting chassis velocity leaves
+          // the ray-cast wheel angular state uninitialised.
+          for (let i = 0; i < 360; i++) brakeSim.step(FORWARD_INPUT);
+          brakeSim.vehicle.selectGear(0);
+          for (let i = 0; i < 30; i++) brakeSim.step(NEUTRAL_INPUT);
+          const speedBeforeHandbrake = brakeSim.vehicle.getTelemetry().speedMps;
           for (let i = 0; i < 90; i++) {
             const sample = brakeSim.step({ ...NEUTRAL_INPUT, handbrake: active });
-            if (active) assert.equal(sample.telemetry.handbrakeActive, true, 'HUD telemetry did not report handbrake active');
+            if (active) {
+              assert.equal(sample.telemetry.handbrakeActive, true, 'HUD telemetry did not report handbrake active');
+              assert((brakeSim.vehicle.wheelController.wheelBrake(0) ?? 0) > 0,
+                'Handbrake did not apply impulse to left rear wheel');
+              assert((brakeSim.vehicle.wheelController.wheelBrake(2) ?? 0) > 0,
+                'Handbrake did not apply impulse to right rear wheel');
+              assert(Math.abs(brakeSim.vehicle.wheelController.wheelBrake(1) ?? 0) < 1e-6,
+                'Handbrake incorrectly applied to left front wheel');
+              assert(Math.abs(brakeSim.vehicle.wheelController.wheelBrake(3) ?? 0) < 1e-6,
+                'Handbrake incorrectly applied to right front wheel');
+            }
           }
+          assert(speedBeforeHandbrake > 3, 'Handbrake regression did not establish a meaningful rolling speed');
           return brakeSim.vehicle.getTelemetry().speedMps;
         } finally {
           brakeSim.dispose();
