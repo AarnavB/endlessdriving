@@ -119,10 +119,10 @@ try {
   assert.equal(signals.canEnterIntersection(signalNode, 'x'),
     signals.getSignalState(signalNode, 'x') === 'green',
     'conflicting axis waits through red and yellow');
-  const northApproach = graph.getEdgeFromTo(graph.getIntersectionId(0, -1), signalNode);
-  const northLeft = graph.getEdgeFromTo(signalNode, graph.getIntersectionId(-1, 0));
-  const southApproach = graph.getEdgeFromTo(graph.getIntersectionId(0, 1), signalNode);
-  const southLeft = graph.getEdgeFromTo(signalNode, graph.getIntersectionId(1, 0));
+  const northApproach = graph.getEdgeFromTo(graph.getIntersectionId(1, 1), signalNode);
+  const northLeft = graph.getEdgeFromTo(signalNode, graph.getIntersectionId(0, 2));
+  const southApproach = graph.getEdgeFromTo(graph.getIntersectionId(1, 3), signalNode);
+  const southLeft = graph.getEdgeFromTo(signalNode, graph.getIntersectionId(2, 2));
   let northLeftPhaseSeen = false;
   let southLeftPhaseSeen = false;
   for (let tick = 0; tick < 560; tick++) {
