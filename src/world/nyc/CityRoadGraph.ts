@@ -187,6 +187,70 @@ export class CityRoadGraph {
     return this.getIntersection(this.getIntersectionId(gridX, gridZ, level));
   }
 
+  /**
+   * Register an additional graph node on any integer road layer. Level zero
+   * IDs remain compatible with the original grid; every other level is part
+   * of the ID, preventing grade-separated intersections from aliasing.
+   */
+  addRoadNode(
+    gridX: number,
+    gridZ: number,
+    position: CityVector3,
+    level: number,
+    kind: CityRoadLevelKind,
+    intersectionType: CityIntersectionType = "grade-separated",
+    signalControlled = false,
+  ): string {
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+      throw new RangeError("Road-node position must contain finite world coordinates.");
+    }
+    if (!Number.isInteger(level)) throw new RangeError("Road-node level must be an integer.");
+    const id = this.getIntersectionId(gridX, gridZ, level);
+    if (this.intersections.has(id)) throw new Error("Road node already exists: " + id);
+    this.registerNode(id, gridX, gridZ, position, level, kind, intersectionType, signalControlled);
+    return id;
+  }
+
+  /**
+   * Add a connected curve-based road segment between previously registered
+   * nodes. This is the supported extension point for future interchanges,
+   * frontage roads, flyovers, underpasses and streamed connector ramps.
+   */
+  addRoadSegment(
+    id: string,
+    fromNodeId: string,
+    toNodeId: string,
+    roadType: CityRoadType,
+    profile: CityRoadProfile,
+    controlPoints: [CityVector3, CityVector3],
+    label = id,
+    maxGradient = 0.045,
+  ): CityRoadSegment {
+    if (!id || this.customSegments.has(id) || this.segments.has(id)) {
+      throw new Error("Road segment ID must be unique and non-empty: " + id);
+    }
+    if (!this.intersections.has(fromNodeId) || !this.intersections.has(toNodeId)) {
+      throw new Error("Both endpoint nodes must be registered before adding a road segment.");
+    }
+    if (fromNodeId === toNodeId) throw new RangeError("Road segment endpoints must be distinct.");
+    if (!Number.isFinite(maxGradient) || maxGradient <= 0 || maxGradient > 0.2) {
+      throw new RangeError("Maximum road gradient must be between 0 and 0.2.");
+    }
+    if (!Number.isFinite(profile.widthM) || profile.widthM <= 0
+      || !Number.isInteger(profile.lanesPerDirection) || profile.lanesPerDirection < 1
+      || !Number.isFinite(profile.laneWidthM) || profile.laneWidthM <= 0) {
+      throw new RangeError("Road profile must provide positive width, lane width and lane count.");
+    }
+    for (const point of controlPoints) {
+      if (![point.x, point.y, point.z].every(Number.isFinite)) {
+        throw new RangeError("Road control points must contain finite world coordinates.");
+      }
+    }
+    return this.registerCustomSegment(
+      id, fromNodeId, toNodeId, roadType, profile, controlPoints, label, maxGradient,
+    );
+  }
+
   getRoadProfile(axis: CityRoadAxis, lineIndex: number): CityRoadProfile {
     let category: CityRoadCategory = "street";
     let lanesPerDirection = 2;
@@ -521,12 +585,17 @@ export class CityRoadGraph {
     profile: CityRoadProfile,
     controlPoints: [CityVector3, CityVector3],
     label: string,
+    maxGradient = 0.045,
   ): CityRoadSegment {
-    const start = { ...this.getIntersection(fromNodeId).position };
-    const end = { ...this.getIntersection(toNodeId).position };
+    const fromNode = this.getIntersection(fromNodeId);
+    const toNode = this.getIntersection(toNodeId);
+    const start = { ...fromNode.position };
+    const end = { ...toNode.position };
     const segment: CityRoadSegment = {
-      id, fromNodeId, toNodeId, start, end, axis: "x", lengthM: 0, profile,
-      level: 1, roadType, maxGradient: 0.045, horizontalCurvature: 0,
+      id, fromNodeId, toNodeId, start, end,
+      axis: Math.abs(end.x - start.x) >= Math.abs(end.z - start.z) ? "x" : "z",
+      lengthM: 0, profile,
+      level: Math.max(fromNode.level, toNode.level), roadType, maxGradient, horizontalCurvature: 0,
       verticalCurvature: 0, controlPoints: [{ ...controlPoints[0] }, { ...controlPoints[1] }], label,
     };
     const table = this.buildCurveTable(segment);
@@ -545,6 +614,15 @@ export class CityRoadGraph {
       maxVerticalCurvature = Math.max(maxVerticalCurvature, Math.abs(grade - lastGrade) / Math.max(0.01, table[i].distance - table[i - 1].distance));
       lastYaw = yaw;
       lastGrade = grade;
+    }
+    for (let i = 1; i < table.length; i++) {
+      const a = table[i - 1].position;
+      const b = table[i].position;
+      const horizontalRun = Math.hypot(b.x - a.x, b.z - a.z);
+      const grade = Math.abs(b.y - a.y) / Math.max(1e-6, horizontalRun);
+      if (grade > maxGradient + 1e-4) {
+        throw new RangeError("Road segment " + id + " exceeds its declared maximum gradient.");
+      }
     }
     segment.horizontalCurvature = maxHorizontalCurvature;
     segment.verticalCurvature = maxVerticalCurvature;
