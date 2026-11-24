@@ -11,6 +11,7 @@ const root = resolve(here, '..');
 const graphPath = resolve(root, 'src/world/nyc/CityRoadGraph.ts');
 const urbanPath = resolve(root, 'src/world/nyc/CityUrbanModel.ts');
 const managerPath = resolve(root, 'src/world/nyc/NYCCityChunkManager.ts');
+const waterfrontLayoutPath = resolve(root, 'src/world/nyc/NYCWaterfrontLayout.ts');
 const trafficPath = resolve(root, 'src/game/TrafficSystem.ts');
 const gamePath = resolve(root, 'src/game/Game.ts');
 
@@ -36,15 +37,20 @@ async function transpile(sourcePath, destinationPath, replacements = []) {
 const graphTemp = resolve(root, 'src/world/nyc/.CityRoadGraph.regression.mjs');
 const urbanTemp = resolve(root, 'src/world/nyc/.CityUrbanModel.regression.mjs');
 const managerTemp = resolve(root, 'src/world/nyc/.NYCCityChunkManager.regression.mjs');
+const waterfrontLayoutTemp = resolve(root, 'src/world/nyc/.NYCWaterfrontLayout.regression.mjs');
 const trafficTemp = resolve(root, 'src/game/.TrafficSystem.regression.mjs');
 let physics;
 let manager;
 let traffic;
 try {
-  await transpile(graphPath, graphTemp);
+  await transpile(waterfrontLayoutPath, waterfrontLayoutTemp);
+  await transpile(graphPath, graphTemp, [
+    ["from './NYCWaterfrontLayout'", "from './.NYCWaterfrontLayout.regression.mjs'"],
+  ]);
   await transpile(urbanPath, urbanTemp);
   await transpile(managerPath, managerTemp, [
     ["from './CityRoadGraph'", "from './.CityRoadGraph.regression.mjs'"],
+    ["from './NYCWaterfrontLayout'", "from './.NYCWaterfrontLayout.regression.mjs'"],
     ["from './CityUrbanModel'", "from './.CityUrbanModel.regression.mjs'"],
   ]);
   await transpile(trafficPath, trafficTemp, [
@@ -55,6 +61,18 @@ try {
   const { NYCCityChunkManager } = await import(pathToFileURL(managerTemp).href);
   const { TrafficSystem } = await import(pathToFileURL(trafficTemp).href);
   const graph = new city.CityRoadGraph(20261124);
+  const riverFrom = graph.getIntersectionId(-16, 0);
+  const riverTo = graph.getIntersectionId(-15, 0);
+  assert.throws(
+    () => graph.getEdgeFromTo(riverFrom, riverTo),
+    /Hudson River water polygon/,
+    'surface graph edges cannot cross the Hudson without an explicit bridge',
+  );
+  const shorelineRoad = graph.getEdgeFromTo(
+    graph.getIntersectionId(-11, 0), graph.getIntersectionId(-11, 1),
+  );
+  assert.equal(graph.getSegment(shorelineRoad.segmentId).roadType, 'surface',
+    'the near-shore road remains connected on dry land');
 
   const start = graph.getIntersectionId(0, 0);
   const finish = graph.getIntersectionId(5, 4);
@@ -747,5 +765,6 @@ try {
     rm(urbanTemp, { force: true }),
     rm(managerTemp, { force: true }),
     rm(trafficTemp, { force: true }),
+    rm(waterfrontLayoutTemp, { force: true }),
   ]);
 }

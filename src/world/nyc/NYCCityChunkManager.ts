@@ -1378,8 +1378,9 @@ export class NYCCityChunkManager {
         if (centreX < minX || centreX >= maxX || centreZ < minZ || centreZ >= maxZ) continue;
 
         const district = getCityDistrictProfile(centreX, centreZ);
+        const eastBankX = getHudsonEastBankX(centreZ);
         if (isHudsonWater(centreX, centreZ)
-          || centreX < getHudsonEastBankX(centreZ) + 300) continue;
+          || (centreX > eastBankX && centreX < eastBankX + 300)) continue;
         if (isCityParkBlock(this.graph.seed, gx, gz, district)) continue;
 
         // Reserve the road, curb and sidewalk envelope on all four block edges.

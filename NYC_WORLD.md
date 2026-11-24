@@ -13,6 +13,14 @@ The active gameplay world is a deterministic, fictionalised Manhattan-inspired c
 
 The former `RoadPath` and `RoadChunkManager` remain in the repository for historical compatibility but are not used by `Game` or the active `TrafficSystem`.
 
+## Hudson River and waterfront
+
+`NYCWaterfrontLayout.ts` defines a shared curved river polygon in the game's ENU frame (+X east, +Y up, +Z north), including both banks, water width, below-surface riverbed and an inland shoreline-road offset. The road graph rejects ordinary surface edges that cross water; chunk roads, sidewalks, curbs and markings are clipped to land intervals derived from the same banks. Building footprints and roadside props that overlap the water are rejected, and a near-bank parcel strip is reserved as an open view corridor.
+
+`NYCWaterfrontSystem.ts` builds a 6.2 km surface with animated wave normals, Fresnel response and cubemap environment reflections. The render target is explicitly owned and disposed; captures are throttled and only run near the river. The system includes a public promenade, seawall, piers, lights, benches and distant New Jersey skyline massing. Promenade, seawall, piers and pilings receive static Rapier colliders; the far-bank skyline is visual-only because no cross-river road connection is created.
+
+The subsystem is integrated with game-loop rendering, day/night blending, origin rebasing and teardown. The coastline is a deterministic authored approximation, not a surveyed shoreline. The active base street network remains the legacy orthogonal prototype and is not yet replaced by NYC Street Centerline GIS geometry.
+
 ## City and district generation
 
 The graph uses an ENU-style simulation frame in metres (+X east, +Y up, +Z north) and deterministic 160 m block spacing. The base road graph remains an orthogonal procedural grid with wider avenues, connecting streets, narrower one-way alleys and special grade-separated links. It is not the real Manhattan street-centreline dataset, and the current playable footprint is not a full five-borough map.
@@ -44,6 +52,12 @@ Every generated building spec creates a corresponding static Rapier cuboid colli
 - The chunk manager and traffic pool preserve the global graph origin while local transforms are rebased to keep the physics world near the player.
 
 The current streamer builds chunks on the main thread through asynchronous task scheduling. It bounds active world memory and rendering scope, but it is not yet a worker-thread meshing system or a city-wide offline GIS/mesh pipeline.
+
+## Reconstruction progress and remaining acceptance criteria
+
+Lane-specific highway access, AI lane filtering, right-shoulder ramp placement and guardrail openings shared by visible geometry and Rapier colliders are implemented. The Hudson now has one shared water mask used by graph connectivity, clipped road/sidewalk geometry, riverbed terrain, waterfront buildings and physical shoreline structures.
+
+The complete city replacement remains unfinished. The 160 m orthogonal graph must still be replaced with a baked authoritative NYC street-centreline network. Surveyed elevation data, varied intersection topologies, functioning stop-sign and traffic-light control, end-to-end player traversal, real gameplay screenshots and in-browser performance measurements are outstanding.
 
 ## Materials and lighting
 

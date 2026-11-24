@@ -16,6 +16,14 @@ const transpiled = ts.transpileModule(source, {
 const moduleUrl = 'data:text/javascript;base64,' + Buffer.from(transpiled).toString('base64');
 const geo = await import(moduleUrl);
 
+const waterLayoutPath = resolve(here, '../src/world/nyc/NYCWaterfrontLayout.ts');
+const waterLayoutSource = await readFile(waterLayoutPath, 'utf8');
+const waterLayoutOutput = ts.transpileModule(waterLayoutSource, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+}).outputText;
+const waterLayoutUrl = 'data:text/javascript;base64,' + Buffer.from(waterLayoutOutput).toString('base64');
+const waterfront = await import(waterLayoutUrl);
+
 const origin = geo.NYC_ORIGIN;
 const atOrigin = geo.geographicToLocal(origin);
 assert(Math.abs(atOrigin.x) < 1e-7, 'origin east coordinate must be zero');
@@ -59,9 +67,30 @@ const bounds = geo.localBoundsToGeographic({
 assert(bounds.north > bounds.south, 'geographic bounds have a positive latitude span');
 assert(bounds.east > bounds.west, 'geographic bounds have a positive longitude span');
 
+for (const z of [-2800, -1400, 0, 1400, 2800]) {
+  const east = waterfront.getHudsonEastBankX(z);
+  const west = waterfront.getHudsonWestBankX(z);
+  const centre = waterfront.getHudsonRiverCenterX(z);
+  assert(west < centre && centre < east, 'Hudson bank ordering');
+  assert(waterfront.getHudsonRiverWidthM(z) > 1700
+    && waterfront.getHudsonRiverWidthM(z) < 2300, 'river remains substantial in width');
+  assert(waterfront.isHudsonWater(centre, z), 'river centre is water');
+  assert(!waterfront.isHudsonWater(east + 12, z), 'Manhattan bank is dry');
+  assert(!waterfront.isHudsonWater(west - 12, z), 'New Jersey bank is dry');
+  assert(!waterfront.isHudsonWater(waterfront.getHudsonShorelineRoadX(z), z),
+    'scenic shoreline road is inland');
+  assert(waterfront.getHudsonRiverDepthM(centre, z) > 4, 'riverbed remains below the surface');
+}
+assert(!waterfront.isHudsonWater(0, waterfront.HUDSON_RIVER_MAX_Z + 100),
+  'river polygon has north/south bounds');
+assert(waterfront.footprintTouchesHudson(-1900, -1800, -20, 20),
+  'a footprint crossing the shoreline is rejected');
+assert(!waterfront.footprintTouchesHudson(-1500, -1400, -20, 20),
+  'an inland footprint remains valid');
+
 console.log(JSON.stringify({
-  suite: 'NYC geospatial regression',
-  checks: 12,
+  suite: 'NYC geospatial and Hudson waterfront layout regression',
+  checks: 50,
   result: 'PASS',
   localCoordinateMetres: {
     east: Number(local.x.toFixed(3)),
