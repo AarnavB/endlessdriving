@@ -1019,6 +1019,51 @@ export class NYCCityChunkManager {
     }
   }
 
+  /** Return the side of a highway deck occupied by a connected ramp. */
+  private getHighwayRampBarrierSide(
+    segment: CityRoadSegment,
+    nodeId: string,
+    endpointDistanceM: number,
+  ): number | null {
+    const deckPose = this.graph.getCenterlinePose(segment.id, endpointDistanceM);
+    for (const edge of this.graph.getOutgoingEdges(nodeId)) {
+      if (edge.segmentId === segment.id) continue;
+      const ramp = this.graph.getSegment(edge.segmentId);
+      if (ramp.roadType !== 'entrance-ramp' && ramp.roadType !== 'exit-ramp') continue;
+      const rampPose = this.graph.getCenterlinePose(
+        ramp.id, Math.min(12, ramp.lengthM), edge.direction,
+      );
+      const lateral = (rampPose.position.x - deckPose.position.x) * deckPose.right.x
+        + (rampPose.position.y - deckPose.position.y) * deckPose.right.y
+        + (rampPose.position.z - deckPose.position.z) * deckPose.right.z;
+      if (Math.abs(lateral) > 0.75) return lateral > 0 ? 1 : -1;
+    }
+    return null;
+  }
+
+  /** Return the ramp-edge side facing an attached elevated carriageway. */
+  private getRampHighwayBarrierSide(
+    segment: CityRoadSegment,
+    nodeId: string,
+    endpointDistanceM: number,
+  ): number | null {
+    const rampSampleDistance = endpointDistanceM === 0
+      ? Math.min(12, segment.lengthM)
+      : Math.max(0, segment.lengthM - 12);
+    const rampPose = this.graph.getCenterlinePose(segment.id, rampSampleDistance);
+    for (const edge of this.graph.getOutgoingEdges(nodeId)) {
+      if (edge.segmentId === segment.id) continue;
+      const highway = this.graph.getSegment(edge.segmentId);
+      if (highway.roadType !== 'elevated-highway') continue;
+      const deckPose = this.graph.getCenterlinePose(highway.id, 0, edge.direction);
+      const lateral = (deckPose.position.x - rampPose.position.x) * rampPose.right.x
+        + (deckPose.position.y - rampPose.position.y) * rampPose.right.y
+        + (deckPose.position.z - rampPose.position.z) * rampPose.right.z;
+      if (Math.abs(lateral) > 0.75) return lateral > 0 ? 1 : -1;
+    }
+    return null;
+  }
+
   private collectBridgeDetails(
     segment: CityRoadSegment,
     bounds: RibbonBounds,
@@ -1033,6 +1078,19 @@ export class NYCCityChunkManager {
     const barrierUp = new THREE.Vector3();
     const barrierForward = new THREE.Vector3();
     const barrierCentre = new THREE.Vector3();
+    const rampOpenings: Array<{ distanceM: number; side: number }> = [];
+    const openingLengthM = 32;
+    if (segment.roadType === 'elevated-highway') {
+      const startSide = this.getHighwayRampBarrierSide(segment, segment.fromNodeId, 0);
+      const endSide = this.getHighwayRampBarrierSide(segment, segment.toNodeId, segment.lengthM);
+      if (startSide !== null) rampOpenings.push({ distanceM: 0, side: startSide });
+      if (endSide !== null) rampOpenings.push({ distanceM: segment.lengthM, side: endSide });
+    } else if (segment.roadType === 'entrance-ramp' || segment.roadType === 'exit-ramp') {
+      const startSide = this.getRampHighwayBarrierSide(segment, segment.fromNodeId, 0);
+      const endSide = this.getRampHighwayBarrierSide(segment, segment.toNodeId, segment.lengthM);
+      if (startSide !== null) rampOpenings.push({ distanceM: 0, side: startSide });
+      if (endSide !== null) rampOpenings.push({ distanceM: segment.lengthM, side: endSide });
+    }
     for (let distance = 4; distance < segment.lengthM; distance += 8) {
       const pose = this.graph.getCenterlinePose(segment.id, distance);
       if (pose.position.x < bounds.minX || pose.position.x >= bounds.maxX
@@ -1044,6 +1102,9 @@ export class NYCCityChunkManager {
       barrierMatrix.makeBasis(barrierRight, barrierUp, barrierForward);
       barrierRotation.setFromRotationMatrix(barrierMatrix);
       for (const side of [-1, 1]) {
+        const intersectsRampOpening = rampOpenings.some((opening) =>
+          opening.side === side && Math.abs(distance - opening.distanceM) < openingLengthM);
+        if (intersectsRampOpening) continue;
         const position = barrierCentre.set(pose.position.x, pose.position.y, pose.position.z)
           .addScaledVector(barrierRight, side * (segment.profile.widthM * 0.5 - 0.12))
           .addScaledVector(barrierUp, 0.56).clone();

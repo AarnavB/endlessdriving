@@ -64,6 +64,14 @@ export interface CityLanePose extends CityCenterlinePose {
   distanceAlongM: number;
 }
 
+/** A legal transition between two road segments at a specific lane. */
+export interface CityLaneConnection {
+  edge: CityRoadEdge;
+  fromLaneIndex: number;
+  toLaneIndex: number;
+  movement: "through" | "ramp-entry" | "ramp-exit";
+}
+
 export interface CityInterchangeDescriptor {
   groundEntryNodeId: string;
   groundExitNodeId: string;
@@ -431,6 +439,77 @@ export class CityRoadGraph {
     };
   }
 
+  /**
+   * Resolve a road-to-road movement at lane level. Lane zero is the
+   * rightmost lane in the direction of travel under the graph's right-hand
+   * traffic convention. Highway ramp access is legal only from that lane,
+   * and a ramp-to-highway movement is assigned to that lane on the deck.
+   */
+  getLaneConnection(
+    incomingEdge: CityRoadEdge,
+    incomingLaneIndex: number,
+    outgoingEdge: CityRoadEdge,
+  ): CityLaneConnection | null {
+    if (incomingEdge.toNodeId !== outgoingEdge.fromNodeId
+      || outgoingEdge.toNodeId === incomingEdge.fromNodeId) return null;
+
+    const incomingSegment = this.getSegment(incomingEdge.segmentId);
+    const outgoingSegment = this.getSegment(outgoingEdge.segmentId);
+    const fromLaneIndex = Math.max(0, Math.min(
+      incomingSegment.profile.lanesPerDirection - 1,
+      Math.trunc(incomingLaneIndex),
+    ));
+    let toLaneIndex = Math.max(0, Math.min(
+      outgoingSegment.profile.lanesPerDirection - 1,
+      fromLaneIndex,
+    ));
+    let movement: CityLaneConnection["movement"] = "through";
+
+    const outgoingIsRamp = outgoingSegment.roadType === "entrance-ramp"
+      || outgoingSegment.roadType === "exit-ramp";
+    const incomingIsRamp = incomingSegment.roadType === "entrance-ramp"
+      || incomingSegment.roadType === "exit-ramp";
+
+    if (incomingSegment.roadType === "elevated-highway" && outgoingIsRamp) {
+      // A ramp must diverge from the shoulder-side lane, never cut across
+      // inner lanes. Check the physical side as well as the lane index: a
+      // ramp on the opposite shoulder is not a legal right-hand exit.
+      if (fromLaneIndex !== 0) return null;
+      const deckPose = this.getCenterlinePose(
+        incomingSegment.id, incomingSegment.lengthM, incomingEdge.direction,
+      );
+      const rampPose = this.getCenterlinePose(
+        outgoingSegment.id, Math.min(8, outgoingSegment.lengthM), outgoingEdge.direction,
+      );
+      const lateral = (rampPose.position.x - deckPose.position.x) * deckPose.right.x
+        + (rampPose.position.y - deckPose.position.y) * deckPose.right.y
+        + (rampPose.position.z - deckPose.position.z) * deckPose.right.z;
+      if (lateral <= 0.5) return null;
+      movement = "ramp-exit";
+    } else if (incomingIsRamp && outgoingSegment.roadType === "elevated-highway") {
+      // Every ramp joins the outside lane of the receiving carriageway.
+      toLaneIndex = 0;
+      movement = "ramp-entry";
+    }
+
+    return {
+      edge: { ...outgoingEdge },
+      fromLaneIndex,
+      toLaneIndex,
+      movement,
+    };
+  }
+
+  getOutgoingLaneConnections(
+    incomingEdge: CityRoadEdge,
+    incomingLaneIndex: number,
+  ): CityLaneConnection[] {
+    return this.getOutgoingEdges(incomingEdge.toNodeId)
+      .filter((edge) => edge.toNodeId !== incomingEdge.fromNodeId)
+      .map((edge) => this.getLaneConnection(incomingEdge, incomingLaneIndex, edge))
+      .filter((connection): connection is CityLaneConnection => connection !== null);
+  }
+
   getSpawnPose(): CityLanePose {
     const edge = this.getEdgeFromTo(nodeId(0, 0), nodeId(0, 1));
     return this.getLanePose(edge, 0, 42);
@@ -545,10 +624,22 @@ export class CityRoadGraph {
     throw new Error("No directed city route exists.");
   }
 
-  chooseNextEdge(intersectionId: string, previousNodeId: string, routeSeed: number): CityRoadEdge | null {
-    const candidates = this.getOutgoingEdges(intersectionId)
-      .filter((edge) => edge.toNodeId !== previousNodeId)
-      .sort((a, b) => a.segmentId.localeCompare(b.segmentId));
+  chooseNextEdge(
+    intersectionId: string,
+    previousNodeId: string,
+    routeSeed: number,
+    incomingEdge?: CityRoadEdge,
+    incomingLaneIndex = 0,
+  ): CityRoadEdge | null {
+    let candidates = this.getOutgoingEdges(intersectionId)
+      .filter((edge) => edge.toNodeId !== previousNodeId);
+    if (incomingEdge) {
+      if (incomingEdge.toNodeId !== intersectionId
+        || incomingEdge.fromNodeId !== previousNodeId) return null;
+      candidates = candidates.filter((edge) =>
+        this.getLaneConnection(incomingEdge, incomingLaneIndex, edge) !== null);
+    }
+    candidates.sort((a, b) => a.segmentId.localeCompare(b.segmentId));
     if (candidates.length === 0) return null;
     return candidates[hash(intersectionId + "|" + previousNodeId, routeSeed) % candidates.length];
   }
@@ -650,7 +741,7 @@ export class CityRoadGraph {
     const rampTopNodeId = this.getIntersectionId(gridX + 2, 3, 1);
     const deckNodeId = this.ensureHighwayNode(gridX + 3);
     const startX = gridX * CITY_BLOCK_SPACING_M;
-    const rampOffsetZ = 360;
+    const rampOffsetZ = 304;
     const midX = startX + CITY_BLOCK_SPACING_M;
     const topX = startX + CITY_BLOCK_SPACING_M * 2;
     if (!this.intersections.has(rampMidNodeId)) {
@@ -805,13 +896,13 @@ export class CityRoadGraph {
     const deckExitNodeId = this.getIntersectionId(3, 2, 1);
     const exitMidNodeId = this.getIntersectionId(4, 2, 1);
 
-    this.registerNode(entryMidNodeId, -2, 2, { x: -320, y: 3.6, z: 336 }, 1, "ramp", "merge", false);
+    this.registerNode(entryMidNodeId, -2, 2, { x: -320, y: 3.6, z: 304 }, 1, "ramp", "merge", false);
     this.registerNode(deckStartNodeId, -1, 2, { x: -160, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "merge", false);
     this.registerNode(deckCrossingNodeId, 0, 2, { x: 0, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "grade-separated", false);
     this.registerNode(deckNodeOneId, 1, 2, { x: 160, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "grade-separated", false);
     this.registerNode(deckNodeTwoId, 2, 2, { x: 320, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "grade-separated", false);
     this.registerNode(deckExitNodeId, 3, 2, { x: 480, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "merge", false);
-    this.registerNode(exitMidNodeId, 4, 2, { x: 640, y: 3.6, z: 336 }, 1, "ramp", "merge", false);
+    this.registerNode(exitMidNodeId, 4, 2, { x: 640, y: 3.6, z: 304 }, 1, "ramp", "merge", false);
 
     const rampProfile: CityRoadProfile = {
       category: "ramp", axis: "x", lineIndex: 2, lanesPerDirection: 1,
@@ -828,12 +919,12 @@ export class CityRoadGraph {
     ];
     this.registerCustomSegment(
       entryRampSegmentIds[0], groundEntryNodeId, entryMidNodeId, "entrance-ramp", rampProfile,
-      [{ x: -426.6667, y: 0, z: 320 }, { x: -373.3333, y: 3.6, z: 336 }],
+      [{ x: -426.6667, y: 0, z: 320 }, { x: -373.3333, y: 3.6, z: 304 }],
       "West entrance ramp - lower transition",
     );
     this.registerCustomSegment(
       entryRampSegmentIds[1], entryMidNodeId, deckStartNodeId, "entrance-ramp", rampProfile,
-      [{ x: -266.6667, y: 3.6, z: 336 }, { x: -213.3333, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }],
+      [{ x: -266.6667, y: 3.6, z: 304 }, { x: -213.3333, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }],
       "West entrance ramp - upper transition",
     );
 
@@ -858,12 +949,12 @@ export class CityRoadGraph {
     ];
     this.registerCustomSegment(
       exitRampSegmentIds[0], deckExitNodeId, exitMidNodeId, "exit-ramp", rampProfile,
-      [{ x: 533.3333, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, { x: 586.6667, y: 3.6, z: 336 }],
+      [{ x: 533.3333, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, { x: 586.6667, y: 3.6, z: 304 }],
       "East exit ramp - upper transition",
     );
     this.registerCustomSegment(
       exitRampSegmentIds[1], exitMidNodeId, groundExitNodeId, "exit-ramp", rampProfile,
-      [{ x: 693.3333, y: 3.6, z: 336 }, { x: 746.6667, y: 0, z: 320 }],
+      [{ x: 693.3333, y: 3.6, z: 304 }, { x: 746.6667, y: 0, z: 320 }],
       "East exit ramp - lower transition",
     );
 

@@ -496,12 +496,19 @@ export class TrafficSystem {
         right: { ...endPose.right },
         up: { ...endPose.up },
       };
+      const laneConnection = this.graph.getLaneConnection(
+        vehicle.edge, vehicle.laneIndex, nextEdge,
+      );
+      if (!laneConnection) {
+        // The route may never silently cross a prohibited lane connection.
+        vehicle.nextEdge = null;
+        vehicle.progress = Math.max(0, segment.lengthM - STOP_LINE_M);
+        vehicle.speed = 0;
+        return;
+      }
       vehicle.edge = nextEdge;
       vehicle.progress = Math.min(overflow, this.graph.getSegment(nextEdge.segmentId).lengthM - 0.01);
-      vehicle.laneIndex = Math.min(
-        vehicle.laneIndex,
-        this.graph.getSegment(nextEdge.segmentId).profile.lanesPerDirection - 1,
-      );
+      vehicle.laneIndex = laneConnection.toLaneIndex;
       vehicle.nextEdge = null;
       vehicle.waitingAt = null;
       vehicle.turnCount++;
@@ -598,6 +605,7 @@ export class TrafficSystem {
     vehicle.nextEdge = this.graph.chooseNextEdge(
       vehicle.edge.toNodeId, vehicle.edge.fromNodeId,
       vehicle.seed + vehicle.turnCount * 31,
+      vehicle.edge, vehicle.laneIndex,
     );
     return vehicle.nextEdge;
   }
@@ -620,8 +628,8 @@ export class TrafficSystem {
     vehicle.waitingAt = null;
     vehicle.stoppedSeconds = 0;
     vehicle.speed = 0;
-    const alternatives = this.graph.getOutgoingEdges(vehicle.edge.toNodeId)
-      .filter((edge) => edge.toNodeId !== vehicle.edge.fromNodeId);
+    const alternatives = this.graph.getOutgoingLaneConnections(vehicle.edge, vehicle.laneIndex)
+      .map((connection) => connection.edge);
     if (alternatives.length > 0) {
       vehicle.nextEdge = alternatives[vehicle.seed % alternatives.length];
       vehicle.progress = Math.min(

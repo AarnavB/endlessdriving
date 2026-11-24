@@ -488,6 +488,75 @@ try {
   }
   assert(bridgeBarriers.length >= 4,
     'both bridge approaches and exits have paired guardrail assemblies');
+
+  const eastboundDeckSegment = graph.getSegment(interchange.highwaySegmentIds.at(-1));
+  const eastboundIncoming = graph.getEdgeFromTo(
+    eastboundDeckSegment.fromNodeId, eastboundDeckSegment.toNodeId,
+  );
+  const westboundIncoming = graph.getEdgeFromTo(
+    eastboundDeckSegment.toNodeId, eastboundDeckSegment.fromNodeId,
+  );
+  const exitRampEdge = graph.getOutgoingEdges(eastboundDeckSegment.toNodeId)
+    .find((edge) => ['entrance-ramp', 'exit-ramp'].includes(graph.getSegment(edge.segmentId).roadType));
+  assert(exitRampEdge, 'the elevated carriageway has an explicit ramp branch');
+  assert(graph.getLaneConnection(eastboundIncoming, 0, exitRampEdge),
+    'the eastbound rightmost lane can enter the right-hand-side exit ramp');
+  assert.equal(graph.getLaneConnection(eastboundIncoming, 1, exitRampEdge), null,
+    'the eastbound middle lane cannot connect directly to a highway exit');
+  assert.equal(graph.getLaneConnection(eastboundIncoming, 2, exitRampEdge), null,
+    'the eastbound innermost lane cannot connect directly to a highway exit');
+  assert.equal(graph.getLaneConnection(westboundIncoming, 0, exitRampEdge), null,
+    'a ramp on the eastbound shoulder is not an illegal westbound left-side exit');
+  assert.equal(graph.chooseNextEdge(
+    eastboundIncoming.toNodeId, eastboundIncoming.fromNodeId, 17, eastboundIncoming, 1,
+  ), null,
+  'AI route selection refuses a ramp when the vehicle is not in the rightmost lane');
+
+  const entryRamp = graph.getSegment(interchange.entryRampSegmentIds.at(-1));
+  const entryRampEdge = graph.getEdgeFromTo(entryRamp.fromNodeId, entryRamp.toNodeId);
+  const highwayAfterEntry = graph.getOutgoingEdges(entryRamp.toNodeId)
+    .find((edge) => graph.getSegment(edge.segmentId).roadType === 'elevated-highway');
+  assert(highwayAfterEntry, 'the entrance ramp connects to the elevated carriageway');
+  const entryConnection = graph.getLaneConnection(entryRampEdge, 0, highwayAfterEntry);
+  assert(entryConnection, 'the entrance ramp has a valid lane-level deck connection');
+  assert.equal(entryConnection.toLaneIndex, 0,
+    'the entrance ramp merges into the receiving highway rightmost lane');
+
+  const deckBarrierSpecs = [];
+  manager.collectBridgeDetails(eastboundDeckSegment, {
+    minX: -10000, maxX: 10000, minZ: -10000, maxZ: 10000,
+  }, deckBarrierSpecs, [], []);
+  const deckRampSide = manager.getHighwayRampBarrierSide(
+    eastboundDeckSegment, eastboundDeckSegment.toNodeId, eastboundDeckSegment.lengthM,
+  );
+  assert.equal(deckRampSide, 1,
+    'the ramp joins the right-hand shoulder of the eastbound deck');
+  let oppositeSideBarrierNearExit = false;
+  for (const barrier of deckBarrierSpecs) {
+    let closestStation = 0;
+    let closestDistance = Infinity;
+    for (let station = 4; station < eastboundDeckSegment.lengthM; station += 8) {
+      const pose = graph.getCenterlinePose(eastboundDeckSegment.id, station);
+      const distance = (barrier.position.x - pose.position.x) ** 2
+        + (barrier.position.z - pose.position.z) ** 2;
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestStation = station;
+      }
+    }
+    const pose = graph.getCenterlinePose(eastboundDeckSegment.id, closestStation);
+    const lateral = (barrier.position.x - pose.position.x) * pose.right.x
+      + (barrier.position.z - pose.position.z) * pose.right.z;
+    const side = lateral > 0 ? 1 : -1;
+    if (eastboundDeckSegment.lengthM - closestStation < 36 && side === -deckRampSide) {
+      oppositeSideBarrierNearExit = true;
+    }
+    assert(!(eastboundDeckSegment.lengthM - closestStation < 36 && side === deckRampSide),
+      'the visible and collidable barrier plan leaves the ramp-side deck opening clear');
+  }
+  assert(oppositeSideBarrierNearExit,
+    'the opposite deck barrier remains in place for protection near the merge');
+
   const terrainChunk = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
   const terrainMesh = terrainChunk?.getObjectByName('terrain-heightfield');
   assert(terrainMesh instanceof THREE.Mesh, 'streamed city chunk includes its terrain heightfield mesh');
