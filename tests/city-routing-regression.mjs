@@ -314,9 +314,13 @@ try {
     && /const tangent = normalizeVector/.test(trafficSource)
     && /const up = normalizeVector\(cross\(tangent, right\)\)/.test(trafficSource),
     'AI road transitions blend 3D position and an orthonormal tangent frame without yaw-only snaps');
-  assert(/enabledRotations\(true, true, false\)/.test(vehicleSource)
-    && /const pitch = Math\.atan2\(heading\.y, horizontalLength\)/.test(vehicleSource),
-    'the player chassis can pitch and reset alignment preserves ramp grade');
+  assert(/enabledRotations\(false, true, false\)/.test(vehicleSource)
+    && /setRoadTangent\(tangent: THREE\.Vector3\)/.test(vehicleSource)
+    && /this\.targetRoadPitch = pitch/.test(vehicleSource)
+    && /this\.appliedRoadPitch = THREE\.MathUtils\.damp/.test(vehicleSource)
+    && /setRoadTangent\(this\.getRoadHeadingAt\(playerPosition\)\)/.test(gameSource)
+    && /roadPitchSampleTicks\+\+ % 6 === 0/.test(gameSource),
+    'player road-grade pitch follows the sampled 3D graph while physics-driven roll and pitch remain locked');
   assert(/preferred\.z, globalPosition\.y/.test(gameSource)
     || /preferred\.z,\s*globalPosition\.y/.test(gameSource),
     'vehicle recovery chooses the nearest road using current elevation as well as X/Z');
