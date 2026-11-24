@@ -321,7 +321,9 @@ export class CityRoadGraph {
       end: { ...endNode.position },
       axis,
       lengthM: CITY_BLOCK_SPACING_M,
-      profile: roadType === "underpass" ? { ...profile, category: "underpass" } : profile,
+      // Keep the street's established functional profile (e.g. avenue);
+      // grade separation is represented independently by roadType.
+      profile,
       level: 0,
       roadType,
       maxGradient: 0.08,
