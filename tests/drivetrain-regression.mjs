@@ -324,6 +324,7 @@ try {
 
       // Select reverse using the established standstill brake gesture, then
       // verify N cancels the reverse state without sending another wheel force.
+      sim.vehicle.selectGear(1);
       sim.vehicle.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       for (let i = 0; i < 32; i++) sim.step(BRAKE_INPUT);
       sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
