@@ -5,7 +5,7 @@ import {
   CityRoadGraph,
   CityTrafficController,
 } from '../world/nyc/CityRoadGraph';
-import type { CityLanePose, CityRoadEdge } from '../world/nyc/CityRoadGraph';
+import type { CityLanePose, CityRoadAxis, CityRoadEdge } from '../world/nyc/CityRoadGraph';
 
 interface TrafficVehicle {
   id: string;
@@ -22,6 +22,25 @@ interface TrafficVehicle {
   turnCount: number;
   transitionFrom: { x: number; y: number; z: number } | null;
   transitionYaw: number;
+}
+
+interface TrafficSignalLamps {
+  red: THREE.MeshStandardMaterial;
+  amber: THREE.MeshStandardMaterial;
+  green: THREE.MeshStandardMaterial;
+}
+
+interface TrafficSignalApproach {
+  axis: CityRoadAxis;
+  direction: 1 | -1;
+  lamps: TrafficSignalLamps;
+  arrowMaterial: THREE.MeshStandardMaterial;
+}
+
+interface TrafficSignalAssembly {
+  intersectionId: string;
+  root: THREE.Group;
+  approaches: TrafficSignalApproach[];
 }
 
 const POOL_SIZE = 10;
@@ -46,6 +65,18 @@ export class TrafficSystem {
   private readonly vehicles: TrafficVehicle[] = [];
   private readonly controller: CityTrafficController;
   private readonly originOffset = new THREE.Vector3();
+  private readonly signalAssemblies: TrafficSignalAssembly[] = [];
+  private signalCentreKey: string | null = null;
+  private readonly signalPoleGeometry = new THREE.CylinderGeometry(0.075, 0.11, 5.1, 8);
+  private readonly signalHeadGeometry = new THREE.BoxGeometry(0.56, 1.9, 0.46);
+  private readonly signalLensGeometry = new THREE.SphereGeometry(0.145, 12, 8);
+  private readonly signalArrowGeometry = this.createSignalArrowGeometry();
+  private readonly signalPoleMaterial = new THREE.MeshStandardMaterial({
+    color: 0x38434a, metalness: 0.78, roughness: 0.42,
+  });
+  private readonly signalHousingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x10161c, metalness: 0.12, roughness: 0.72,
+  });
   private readonly nextTranslation = { x: 0, y: 0.49, z: 0 };
   private readonly chassisGeometry = new THREE.BoxGeometry(1.72, 0.52, VEHICLE_LENGTH_M);
   private readonly roofGeometry = new THREE.BoxGeometry(1.38, 0.52, 1.82);
@@ -67,11 +98,13 @@ export class TrafficSystem {
   ) {
     this.controller = new CityTrafficController(graph);
     this.createPool(playerSpawn);
+    this.updateSignalInfrastructure(playerSpawn);
   }
 
-  update(dt: number, _playerPosition: THREE.Vector3): void {
+  update(dt: number, playerPosition: THREE.Vector3): void {
     const safeDt = Math.max(0, Math.min(dt, 1 / 30));
     this.controller.advance(safeDt);
+    this.updateSignalInfrastructure(playerPosition);
     for (const vehicle of this.vehicles) this.updateVehicle(vehicle, safeDt);
   }
 
@@ -100,6 +133,7 @@ export class TrafficSystem {
       vehicle.transitionFrom = null;
       this.placeVehicle(vehicle);
     }
+    this.updateSignalInfrastructure(playerPosition);
   }
 
   rebase(delta: THREE.Vector3): void {
@@ -110,6 +144,7 @@ export class TrafficSystem {
       vehicle.body.setTranslation({ x: p.x - delta.x, y: p.y - delta.y, z: p.z - delta.z }, true);
       vehicle.visual.position.sub(delta);
     }
+    for (const signal of this.signalAssemblies) signal.root.position.sub(delta);
   }
 
   syncVisuals(): void {
@@ -135,6 +170,13 @@ export class TrafficSystem {
       this.world.removeRigidBody(vehicle.body);
     }
     this.vehicles.length = 0;
+    this.clearSignalInfrastructure();
+    this.signalPoleGeometry.dispose();
+    this.signalHeadGeometry.dispose();
+    this.signalLensGeometry.dispose();
+    this.signalArrowGeometry.dispose();
+    this.signalPoleMaterial.dispose();
+    this.signalHousingMaterial.dispose();
     this.chassisGeometry.dispose();
     this.roofGeometry.dispose();
     this.wheelGeometry.dispose();
@@ -143,6 +185,149 @@ export class TrafficSystem {
     this.glassMaterial.dispose();
     this.roofMaterial.dispose();
     for (const material of this.bodyMaterials) material.dispose();
+  }
+
+  private createSignalArrowGeometry(): THREE.BufferGeometry {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.23, 0);
+    shape.lineTo(-0.035, 0.19);
+    shape.lineTo(-0.035, 0.075);
+    shape.lineTo(0.23, 0.075);
+    shape.lineTo(0.23, -0.075);
+    shape.lineTo(-0.035, -0.075);
+    shape.lineTo(-0.035, -0.19);
+    shape.closePath();
+    return new THREE.ShapeGeometry(shape);
+  }
+
+  private createSignalLamps(): TrafficSignalLamps {
+    const create = (colour: number): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({
+      color: colour,
+      emissive: colour,
+      emissiveIntensity: 0.025,
+      roughness: 0.32,
+      metalness: 0.02,
+    });
+    return {
+      red: create(0xff3028),
+      amber: create(0xffa521),
+      green: create(0x35ef74),
+    };
+  }
+
+  private createSignalArrowMaterial(): THREE.MeshStandardMaterial {
+    return new THREE.MeshStandardMaterial({
+      color: 0x35ef74,
+      emissive: 0x35ef74,
+      emissiveIntensity: 0.025,
+      roughness: 0.32,
+      metalness: 0.02,
+    });
+  }
+
+  private setSignalLamps(lamps: TrafficSignalLamps, state: 'red' | 'yellow' | 'green'): void {
+    lamps.red.emissiveIntensity = state === 'red' ? 2.2 : 0.025;
+    lamps.amber.emissiveIntensity = state === 'yellow' ? 2.0 : 0.025;
+    lamps.green.emissiveIntensity = state === 'green' ? 2.2 : 0.025;
+  }
+
+  private createSignalHead(
+    root: THREE.Group,
+    x: number,
+    z: number,
+    yaw: number,
+    approach: TrafficSignalApproach,
+  ): void {
+    const pole = new THREE.Mesh(this.signalPoleGeometry, this.signalPoleMaterial);
+    pole.position.set(x, 2.55, z);
+    pole.castShadow = false;
+    pole.receiveShadow = false;
+
+    const head = new THREE.Group();
+    head.position.set(x, 4.88, z);
+    head.rotation.y = yaw;
+    const housing = new THREE.Mesh(this.signalHeadGeometry, this.signalHousingMaterial);
+    const red = new THREE.Mesh(this.signalLensGeometry, approach.lamps.red);
+    const amber = new THREE.Mesh(this.signalLensGeometry, approach.lamps.amber);
+    const green = new THREE.Mesh(this.signalLensGeometry, approach.lamps.green);
+    red.position.set(0, 0.58, 0.245);
+    amber.position.set(0, 0.02, 0.245);
+    green.position.set(0, -0.54, 0.245);
+    const arrow = new THREE.Mesh(this.signalArrowGeometry, approach.arrowMaterial);
+    arrow.position.set(0, -0.79, 0.245);
+    head.add(housing, red, amber, green, arrow);
+    root.add(pole, head);
+  }
+
+  private createSignalAssembly(gridX: number, gridZ: number): TrafficSignalAssembly {
+    const intersectionId = this.graph.getIntersectionId(gridX, gridZ);
+    const root = new THREE.Group();
+    root.name = 'traffic-signals-' + intersectionId;
+    root.position.set(
+      gridX * CITY_BLOCK_SPACING_M - this.originOffset.x,
+      -this.originOffset.y,
+      gridZ * CITY_BLOCK_SPACING_M - this.originOffset.z,
+    );
+
+    const verticalHalf = this.graph.getRoadProfile('z', gridX).widthM * 0.5;
+    const horizontalHalf = this.graph.getRoadProfile('x', gridZ).widthM * 0.5;
+    const northSouthLamps = this.createSignalLamps();
+    const eastWestLamps = this.createSignalLamps();
+    const approaches: TrafficSignalApproach[] = [
+      { axis: 'z', direction: 1, lamps: northSouthLamps, arrowMaterial: this.createSignalArrowMaterial() },
+      { axis: 'z', direction: -1, lamps: northSouthLamps, arrowMaterial: this.createSignalArrowMaterial() },
+      { axis: 'x', direction: 1, lamps: eastWestLamps, arrowMaterial: this.createSignalArrowMaterial() },
+      { axis: 'x', direction: -1, lamps: eastWestLamps, arrowMaterial: this.createSignalArrowMaterial() },
+    ];
+
+    this.createSignalHead(root, verticalHalf + 1.35, -horizontalHalf - 4.2, Math.PI, approaches[0]);
+    this.createSignalHead(root, -verticalHalf - 1.35, horizontalHalf + 4.2, 0, approaches[1]);
+    this.createSignalHead(root, -verticalHalf - 4.2, -horizontalHalf - 1.35, -Math.PI * 0.5, approaches[2]);
+    this.createSignalHead(root, verticalHalf + 4.2, horizontalHalf + 1.35, Math.PI * 0.5, approaches[3]);
+    this.scene.add(root);
+    return { intersectionId, root, approaches };
+  }
+
+  private updateSignalInfrastructure(playerPosition: THREE.Vector3): void {
+    const gridX = Math.round((playerPosition.x + this.originOffset.x) / CITY_BLOCK_SPACING_M);
+    const gridZ = Math.round((playerPosition.z + this.originOffset.z) / CITY_BLOCK_SPACING_M);
+    const centreKey = gridX + ':' + gridZ;
+    if (this.signalCentreKey !== centreKey) {
+      this.clearSignalInfrastructure();
+      this.signalCentreKey = centreKey;
+      for (let x = gridX - 1; x <= gridX + 1; x++) {
+        for (let z = gridZ - 1; z <= gridZ + 1; z++) {
+          this.signalAssemblies.push(this.createSignalAssembly(x, z));
+        }
+      }
+    }
+
+    for (const assembly of this.signalAssemblies) {
+      for (const approach of assembly.approaches) {
+        const axisState = this.controller.getSignalState(assembly.intersectionId, approach.axis);
+        this.setSignalLamps(approach.lamps, axisState);
+        const leftTurnState = this.controller.getProtectedLeftTurnState(
+          assembly.intersectionId, approach.axis, approach.direction,
+        );
+        approach.arrowMaterial.emissiveIntensity = leftTurnState === 'green' ? 2.15 : 0.025;
+      }
+    }
+  }
+
+  private clearSignalInfrastructure(): void {
+    for (const assembly of this.signalAssemblies) {
+      this.scene.remove(assembly.root);
+      assembly.root.clear();
+      const uniqueLamps = new Set<THREE.Material>();
+      for (const approach of assembly.approaches) {
+        uniqueLamps.add(approach.arrowMaterial);
+        uniqueLamps.add(approach.lamps.red);
+        uniqueLamps.add(approach.lamps.amber);
+        uniqueLamps.add(approach.lamps.green);
+      }
+      for (const material of uniqueLamps) material.dispose();
+    }
+    this.signalAssemblies.length = 0;
   }
 
   private createPool(playerSpawn: THREE.Vector3): void {
