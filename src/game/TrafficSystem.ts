@@ -28,6 +28,9 @@ interface TrafficSignalLamps {
   red: THREE.MeshStandardMaterial;
   amber: THREE.MeshStandardMaterial;
   green: THREE.MeshStandardMaterial;
+  redGlow: THREE.SpriteMaterial;
+  amberGlow: THREE.SpriteMaterial;
+  greenGlow: THREE.SpriteMaterial;
 }
 
 interface TrafficSignalApproach {
@@ -67,6 +70,7 @@ export class TrafficSystem {
   private readonly originOffset = new THREE.Vector3();
   private readonly signalAssemblies: TrafficSignalAssembly[] = [];
   private signalCentreKey: string | null = null;
+  private readonly signalGlowTexture: THREE.DataTexture;
   private readonly signalPoleGeometry = new THREE.CylinderGeometry(0.075, 0.11, 5.1, 8);
   private readonly signalHeadGeometry = new THREE.BoxGeometry(0.56, 1.9, 0.46);
   private readonly signalLensGeometry = new THREE.SphereGeometry(0.145, 12, 8);
@@ -97,6 +101,7 @@ export class TrafficSystem {
     playerSpawn: THREE.Vector3,
   ) {
     this.controller = new CityTrafficController(graph);
+    this.signalGlowTexture = this.createSignalGlowTexture();
     this.createPool(playerSpawn);
     this.updateSignalInfrastructure(playerSpawn);
   }
@@ -175,6 +180,7 @@ export class TrafficSystem {
     this.signalHeadGeometry.dispose();
     this.signalLensGeometry.dispose();
     this.signalArrowGeometry.dispose();
+    this.signalGlowTexture.dispose();
     this.signalPoleMaterial.dispose();
     this.signalHousingMaterial.dispose();
     this.chassisGeometry.dispose();
@@ -185,6 +191,36 @@ export class TrafficSystem {
     this.glassMaterial.dispose();
     this.roofMaterial.dispose();
     for (const material of this.bodyMaterials) material.dispose();
+  }
+
+  /**
+   * Radial alpha texture for additive lens halos. This produces a soft falloff
+   * without enabling a full-scene bloom pass or adding dozens of point lights.
+   */
+  private createSignalGlowTexture(): THREE.DataTexture {
+    const size = 64;
+    const pixels = new Uint8Array(size * size * 4);
+    const centre = (size - 1) * 0.5;
+    const radius = size * 0.5;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const distance = Math.hypot(x - centre, y - centre) / radius;
+        const falloff = Math.max(0, 1 - distance);
+        const alpha = Math.round(Math.pow(falloff, 2.35) * 255);
+        const offset = (y * size + x) * 4;
+        pixels[offset] = 255;
+        pixels[offset + 1] = 255;
+        pixels[offset + 2] = 255;
+        pixels[offset + 3] = alpha;
+      }
+    }
+    const texture = new THREE.DataTexture(pixels, size, size, THREE.RGBAFormat);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    return texture;
   }
 
   private createSignalArrowGeometry(): THREE.BufferGeometry {
@@ -201,17 +237,30 @@ export class TrafficSystem {
   }
 
   private createSignalLamps(): TrafficSignalLamps {
-    const create = (colour: number): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({
+    const createLens = (colour: number): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({
       color: colour,
       emissive: colour,
-      emissiveIntensity: 0.025,
-      roughness: 0.32,
+      emissiveIntensity: 0.04,
+      roughness: 0.3,
       metalness: 0.02,
+      toneMapped: false,
+    });
+    const createGlow = (colour: number): THREE.SpriteMaterial => new THREE.SpriteMaterial({
+      map: this.signalGlowTexture,
+      color: colour,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
     });
     return {
-      red: create(0xff3028),
-      amber: create(0xffa521),
-      green: create(0x35ef74),
+      red: createLens(0xff3028),
+      amber: createLens(0xffa521),
+      green: createLens(0x35ef74),
+      redGlow: createGlow(0xff3028),
+      amberGlow: createGlow(0xffa521),
+      greenGlow: createGlow(0x35ef74),
     };
   }
 
@@ -226,9 +275,15 @@ export class TrafficSystem {
   }
 
   private setSignalLamps(lamps: TrafficSignalLamps, state: 'red' | 'yellow' | 'green'): void {
-    lamps.red.emissiveIntensity = state === 'red' ? 2.2 : 0.025;
-    lamps.amber.emissiveIntensity = state === 'yellow' ? 2.0 : 0.025;
-    lamps.green.emissiveIntensity = state === 'green' ? 2.2 : 0.025;
+    const redActive = state === 'red';
+    const amberActive = state === 'yellow';
+    const greenActive = state === 'green';
+    lamps.red.emissiveIntensity = redActive ? 3.4 : 0.04;
+    lamps.amber.emissiveIntensity = amberActive ? 3.1 : 0.04;
+    lamps.green.emissiveIntensity = greenActive ? 3.4 : 0.04;
+    lamps.redGlow.opacity = redActive ? 0.58 : 0;
+    lamps.amberGlow.opacity = amberActive ? 0.56 : 0;
+    lamps.greenGlow.opacity = greenActive ? 0.58 : 0;
   }
 
   private createSignalHead(
@@ -253,12 +308,20 @@ export class TrafficSystem {
     red.position.set(0, 0.58, 0.245);
     amber.position.set(0, 0.02, 0.245);
     green.position.set(0, -0.54, 0.245);
+    const redGlow = new THREE.Sprite(approach.lamps.redGlow);
+    const amberGlow = new THREE.Sprite(approach.lamps.amberGlow);
+    const greenGlow = new THREE.Sprite(approach.lamps.greenGlow);
+    for (const [glow, y] of [[redGlow, 0.58], [amberGlow, 0.02], [greenGlow, -0.54]] as const) {
+      glow.position.set(0, y, 0.425);
+      glow.scale.set(0.92, 0.92, 1);
+      glow.renderOrder = 2;
+    }
     const arrow = new THREE.Mesh(this.signalArrowGeometry, approach.arrowMaterial);
     // The arrow is a left-turn arrow in the driver's signal face, not a
     // generic right-pointing decorative chevron.
     arrow.rotation.z = Math.PI;
     arrow.position.set(0, -0.79, 0.245);
-    head.add(housing, red, amber, green, arrow);
+    head.add(housing, redGlow, amberGlow, greenGlow, red, amber, green, arrow);
     root.add(pole, head);
   }
 
@@ -312,7 +375,8 @@ export class TrafficSystem {
         const leftTurnState = this.controller.getProtectedLeftTurnState(
           assembly.intersectionId, approach.axis, approach.direction,
         );
-        approach.arrowMaterial.emissiveIntensity = leftTurnState === 'green' ? 2.15 : 0.025;
+        approach.arrowMaterial.emissiveIntensity = leftTurnState === 'green' ? 3.25 : 0.025;
+        approach.arrowMaterial.toneMapped = false;
       }
     }
   }
@@ -327,6 +391,9 @@ export class TrafficSystem {
         uniqueLamps.add(approach.lamps.red);
         uniqueLamps.add(approach.lamps.amber);
         uniqueLamps.add(approach.lamps.green);
+        uniqueLamps.add(approach.lamps.redGlow);
+        uniqueLamps.add(approach.lamps.amberGlow);
+        uniqueLamps.add(approach.lamps.greenGlow);
       }
       for (const material of uniqueLamps) material.dispose();
     }
