@@ -1012,7 +1012,6 @@ export class CityTrafficController {
     const node = this.graph.getIntersection(intersectionId);
     if (!node.signalControlled || node.intersectionType !== "at-grade") return true;
     const incomingSegment = this.graph.getSegment(incoming.segmentId);
-    const outgoingSegment = this.graph.getSegment(outgoing.segmentId);
     const inPose = this.graph.getCenterlinePose(incoming.segmentId, incomingSegment.lengthM, incoming.direction);
     const outPose = this.graph.getCenterlinePose(outgoing.segmentId, 0, outgoing.direction);
     const incomingYaw = Math.atan2(inPose.tangent.x, inPose.tangent.z);
