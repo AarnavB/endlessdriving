@@ -3,10 +3,9 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from './InputManager';
 import { CameraRig } from './CameraRig';
 import { TrafficSystem } from './TrafficSystem';
-import { RoadChunkManager } from '../world/RoadChunkManager';
 import { NYCCityChunkManager } from '../world/nyc/NYCCityChunkManager';
+import { CityRoadGraph } from '../world/nyc/CityRoadGraph';
 import { GooglePhotorealisticTiles } from '../world/nyc/GooglePhotorealisticTiles';
-import { RoadPath } from '../world/RoadPath';
 import { VehicleController } from '../vehicles/VehicleController';
 import { getVehicleDefinition, loadSelectedVehicleId, saveSelectedVehicleId } from '../vehicles/VehicleDefinitions';
 import { GaragePreview } from '../vehicles/GaragePreview';
@@ -30,11 +29,10 @@ export class Game {
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
   private latestTelemetry: VehicleTelemetry | null = null;
-  private readonly roadPath = new RoadPath(20261122);
+  private readonly roadGraph = new CityRoadGraph(20261124);
   private readonly worldOffset = new THREE.Vector3();
-  private worldScene!: RoadChunkManager | NYCCityChunkManager;
+  private worldScene!: NYCCityChunkManager;
   private googleTiles: GooglePhotorealisticTiles | null = null;
-  private cityDataAttribution: HTMLDivElement | null = null;
   private physics!: RAPIER.World;
   private vehicle!: VehicleController;
   private traffic!: TrafficSystem;
@@ -156,19 +154,28 @@ export class Game {
     this.traffic.dispose();
     this.worldScene.dispose();
     this.googleTiles?.dispose();
-    this.cityDataAttribution?.remove();
     this.renderer.dispose();
     this.physics.free();
   }
 
   private getSpawnPosition(): THREE.Vector3 {
-    const position = this.roadPath.getLanePositionAtWorldZ(-70, 1.8).sub(this.worldOffset);
-    position.y += 0.72;
-    return position;
+    const pose = this.roadGraph.getSpawnPose();
+    return new THREE.Vector3(
+      pose.position.x - this.worldOffset.x,
+      pose.position.y + 0.72 - this.worldOffset.y,
+      pose.position.z - this.worldOffset.z,
+    );
   }
 
-  private getRoadHeadingAtLocalZ(localZ: number): THREE.Vector3 {
-    return this.roadPath.sampleAtWorldZ(localZ + this.worldOffset.z).tangent;
+  private getRoadHeadingAt(position: THREE.Vector3): THREE.Vector3 {
+    const forward = this.vehicle?.getForward() ?? new THREE.Vector3(0, 0, 1);
+    const tangent = this.roadGraph.getNearestRoadHeading(
+      position.x + this.worldOffset.x,
+      position.z + this.worldOffset.z,
+      forward.x,
+      forward.z,
+    );
+    return new THREE.Vector3(tangent.x, tangent.y, tangent.z);
   }
 
   /**
@@ -227,41 +234,14 @@ export class Game {
     this.physics.numInternalPgsIterations = 2;
 
     const spawnPosition = this.getSpawnPosition();
-    const cityWorld = new NYCCityChunkManager(this.scene, this.physics, this.roadPath);
-    try {
-      await cityWorld.initialize(spawnPosition);
-      this.worldScene = cityWorld;
-      this.cityDataAttribution = document.createElement('div');
-      this.cityDataAttribution.setAttribute('aria-label', 'NYC Open Data attribution');
-      this.cityDataAttribution.textContent = 'NYC Open Data  ·  OTI — Building Footprints + Street Centerline';
-      this.cityDataAttribution.style.position = 'fixed';
-      this.cityDataAttribution.style.left = '12px';
-      this.cityDataAttribution.style.bottom = '9px';
-      this.cityDataAttribution.style.zIndex = '10000';
-      this.cityDataAttribution.style.padding = '5px 8px';
-      this.cityDataAttribution.style.borderRadius = '3px';
-      this.cityDataAttribution.style.background = 'rgba(0, 0, 0, 0.76)';
-      this.cityDataAttribution.style.color = '#fff';
-      this.cityDataAttribution.style.font = '11px/1.4 Arial, sans-serif';
-      this.cityDataAttribution.style.pointerEvents = 'none';
-      document.body.appendChild(this.cityDataAttribution);
-    } catch (error) {
-      console.error('NYC Open Data world could not load; retaining the original fallback world:', error);
-      cityWorld.dispose();
-      const fallbackWorld = new RoadChunkManager(this.scene, this.physics, this.roadPath);
-      fallbackWorld.update(spawnPosition);
-      this.worldScene = fallbackWorld;
-    }
+    const cityWorld = new NYCCityChunkManager(this.scene, this.physics, this.roadGraph);
+    await cityWorld.initialize(spawnPosition);
+    this.worldScene = cityWorld;
 
     this.vehicle = new VehicleController(this.physics, this.scene, getVehicleDefinition(loadSelectedVehicleId()));
     this.vehicle.setManualTransmission(this.manualTransmission);
-    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAtLocalZ(spawnPosition.z));
-    this.traffic = new TrafficSystem(
-      this.physics,
-      this.scene,
-      this.roadPath,
-      this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z),
-    );
+    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAt(spawnPosition));
+    this.traffic = new TrafficSystem(this.physics, this.scene, this.roadGraph, spawnPosition);
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.latestTelemetry = this.vehicle.getTelemetry();
   }
@@ -384,9 +364,9 @@ export class Game {
     this.paused = false;
     this.physicsAccumulator = 0;
     const spawnPosition = this.getSpawnPosition();
-    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAtLocalZ(spawnPosition.z));
+    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAt(spawnPosition));
     this.worldScene.reset(spawnPosition);
-    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z));
+    this.traffic.reset(spawnPosition);
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.resetSessionProgress();
@@ -419,19 +399,30 @@ export class Game {
 
   private resetVehicle(): void {
     const position = this.vehicle.getPosition();
-    position.y = this.worldScene.sampleAtWorldZ(position.z + this.worldOffset.z).position.y + 0.72;
-    this.vehicle.reset(position, false, this.getRoadHeadingAtLocalZ(position.z));
+    const globalPosition = new THREE.Vector3(
+      position.x + this.worldOffset.x,
+      position.y + this.worldOffset.y,
+      position.z + this.worldOffset.z,
+    );
+    const preferred = this.vehicle.getForward();
+    const lane = this.roadGraph.getNearestLanePose(globalPosition.x, globalPosition.z, preferred.x, preferred.z);
+    position.set(
+      lane.position.x - this.worldOffset.x,
+      lane.position.y + 0.72 - this.worldOffset.y,
+      lane.position.z - this.worldOffset.z,
+    );
+    this.vehicle.reset(position, false, new THREE.Vector3(lane.tangent.x, lane.tangent.y, lane.tangent.z));
     this.worldScene.reset(position);
-    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(position.z + this.worldOffset.z));
+    this.traffic.reset(position);
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
   }
 
   private restartDrive(): void {
     const spawnPosition = this.getSpawnPosition();
-    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAtLocalZ(spawnPosition.z));
+    this.vehicle.reset(spawnPosition, true, this.getRoadHeadingAt(spawnPosition));
     this.worldScene.reset(spawnPosition);
-    this.traffic.reset(this.roadPath.getDistanceAtWorldZ(spawnPosition.z + this.worldOffset.z));
+    this.traffic.reset(spawnPosition);
     this.latestTelemetry = this.vehicle.getTelemetry();
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     this.ui.resetSessionProgress();

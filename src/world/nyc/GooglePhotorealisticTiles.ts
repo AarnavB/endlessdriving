@@ -38,12 +38,16 @@ export class GooglePhotorealisticTiles {
 
     this.attribution = document.createElement('div');
     this.attribution.setAttribute('aria-label', 'Google Maps and 3D tile data attribution');
+    this.attribution.setAttribute('translate', 'no');
     this.attribution.style.position = 'fixed';
     this.attribution.style.right = '12px';
     this.attribution.style.bottom = '9px';
     this.attribution.style.zIndex = '10000';
     this.attribution.style.maxWidth = '58vw';
-    this.attribution.style.padding = '5px 8px';
+    this.attribution.style.maxHeight = '24vh';
+    this.attribution.style.overflowY = 'auto';
+    this.attribution.style.whiteSpace = 'normal';
+    this.attribution.style.padding = '7px 10px';
     this.attribution.style.borderRadius = '3px';
     this.attribution.style.background = 'rgba(0, 0, 0, 0.76)';
     this.attribution.style.color = '#fff';
@@ -82,13 +86,23 @@ export class GooglePhotorealisticTiles {
       type?: string;
       value?: string;
     }>;
-    const providerCredits = attributions
-      .filter((item) => item.type === 'string' && typeof item.value === 'string')
-      .map((item) => item.value?.trim() ?? '')
-      .filter((value) => value.length > 0);
-    const uniqueCredits = [...new Set(providerCredits)];
-    const nextText = uniqueCredits.length > 0
-      ? 'Google Maps  ·  ' + uniqueCredits.join('; ')
+    // The renderer aggregates credits for tiles currently in view. Count each
+    // provider occurrence and sort highest-frequency providers first, matching
+    // the Map Tiles API attribution guidance.
+    const occurrenceCounts = new Map<string, number>();
+    for (const item of attributions) {
+      if (typeof item.value !== 'string') continue;
+      for (const value of item.value.split(';')) {
+        const credit = value.trim();
+        if (!credit) continue;
+        occurrenceCounts.set(credit, (occurrenceCounts.get(credit) ?? 0) + 1);
+      }
+    }
+    const sortedCredits = [...occurrenceCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([credit]) => credit);
+    const nextText = sortedCredits.length > 0
+      ? 'Google Maps  ·  Map data: ' + sortedCredits.join('; ')
       : 'Google Maps';
     if (nextText !== this.lastAttribution) {
       this.attribution.textContent = nextText;
