@@ -100,6 +100,14 @@ try {
     'the elevated and ground nodes occupy the same Z coordinate');
   assert(deckCrossing.position.y > groundCrossing.position.y + 6,
     'the highway deck has genuine vertical clearance above the street');
+  const nearestDeckPose = graph.getNearestLanePose(
+    0, 320, 1, 0, city.CITY_HIGHWAY_ELEVATION_M,
+  );
+  assert(Math.abs(nearestDeckPose.position.y - city.CITY_HIGHWAY_ELEVATION_M) < 1e-6,
+    'nearest-lane sampling selects the elevated deck when the query Y is on the highway');
+  const nearestGroundPose = graph.getNearestLanePose(0, 320, 1, 0, 0);
+  assert(Math.abs(nearestGroundPose.position.y) < 1e-6,
+    'nearest-lane sampling remains on the surface street when the query Y is at ground level');
   assert.notEqual(deckCrossing.id, groundCrossing.id,
     'coincident roads at different levels have distinct node identities');
   assert(graph.getOutgoingEdges(groundCrossingId)
@@ -255,6 +263,7 @@ try {
   const gameSource = await readFile(gamePath, 'utf8');
   const trafficSource = await readFile(trafficPath, 'utf8');
   const managerSource = await readFile(managerPath, 'utf8');
+  const vehicleSource = await readFile(resolve(root, 'src/vehicles/VehicleController.ts'), 'utf8');
   assert(!/RoadPath|RoadChunkManager/.test(gameSource), 'Game.ts no longer depends on the scalar highway system');
   assert(/new CityRoadGraph/.test(gameSource), 'Game owns the deterministic city road graph');
   assert(/new NYCCityChunkManager\(this\.scene, this\.physics, this\.roadGraph\)/.test(gameSource),
@@ -271,6 +280,17 @@ try {
     && /makeBasis\(/.test(trafficSource)
     && /pose\.tangent/.test(trafficSource),
     'AI vehicle orientation follows the full 3D road tangent frame rather than yaw alone');
+  assert(/transitionFrom: CityLanePose \| null/.test(trafficSource)
+    && /blendVector/.test(trafficSource)
+    && /const tangent = normalizeVector/.test(trafficSource)
+    && /const up = normalizeVector\(cross\(tangent, right\)\)/.test(trafficSource),
+    'AI road transitions blend 3D position and an orthonormal tangent frame without yaw-only snaps');
+  assert(/enabledRotations\(true, true, false\)/.test(vehicleSource)
+    && /const pitch = Math\.atan2\(heading\.y, horizontalLength\)/.test(vehicleSource),
+    'the player chassis can pitch and reset alignment preserves ramp grade');
+  assert(/preferred\.z, globalPosition\.y/.test(gameSource)
+    || /preferred\.z,\s*globalPosition\.y/.test(gameSource),
+    'vehicle recovery chooses the nearest road using current elevation as well as X/Z');
   assert(/getSpecialSegmentsInBounds/.test(managerSource)
     && /elevated-highways-and-ramps/.test(managerSource)
     && /bridge-deck-undersides/.test(managerSource),
