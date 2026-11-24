@@ -1434,10 +1434,6 @@ export class NYCCityChunkManager {
 
     // Park blocks are open parcels selected by stable district rules. Trees are
     // confined to those reserved green-space footprints, with trunk colliders.
-    const parkGeometry = new THREE.InstancedMesh(this.unitBox, this.parkMaterial, Math.max(1, (lastGridX - firstGridX + 1) * (lastGridZ - firstGridZ + 1)));
-    const treeMesh = new THREE.InstancedMesh(this.treeGeometry, this.treeMaterial, Math.max(1, (lastGridX - firstGridX + 1) * (lastGridZ - firstGridZ + 1) * 3));
-    const trunks = new THREE.InstancedMesh(this.unitBox, this.treeTrunkMaterial, treeMesh.count);
-    let parkCount = 0;
     let treeCount = 0;
     for (let gx = firstGridX; gx < lastGridX; gx++) {
       const blockCentreX = (gx + 0.5) * CITY_BLOCK_SPACING_M;
