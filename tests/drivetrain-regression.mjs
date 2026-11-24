@@ -449,6 +449,49 @@ try {
     return { vehicle: definition.name, left: runDirection(-0.65), right: runDirection(0.65), result: 'PASS' };
   }
 
+  function runSpeedSensitiveSteeringRegression(definition) {
+    const speedsKmh = [10, 50, 100];
+    const samples = [];
+    for (const speedKmh of speedsKmh) {
+      const sim = createSimulation(definition, false, FIXED_DT);
+      try {
+        sim.vehicle.body.setLinvel({ x: 0, y: 0, z: speedKmh / 3.6 }, true);
+        sim.step({ ...NEUTRAL_INPUT, steer: 1 });
+        const controller = sim.vehicle.wheelController;
+        const left = controller.wheelSteering(1) ?? 0;
+        const right = controller.wheelSteering(3) ?? 0;
+        assert(left > 0 && right > 0,
+          `${definition.name}: right steering command lost direction at ${speedKmh} km/h`);
+        assert(
+          Math.abs(sim.vehicle.wheelMeshes[1].steeringPivot.rotation.y - left) < 1e-4,
+          `${definition.name}: left steering visual diverged at ${speedKmh} km/h`,
+        );
+        assert(
+          Math.abs(sim.vehicle.wheelMeshes[3].steeringPivot.rotation.y - right) < 1e-4,
+          `${definition.name}: right steering visual diverged at ${speedKmh} km/h`,
+        );
+        assert(Math.abs(left) <= 0.34 && Math.abs(right) <= 0.34,
+          `${definition.name}: road-wheel angle exceeded rack calibration`);
+        samples.push({
+          speedKmh,
+          leftAngleRad: Number(left.toFixed(4)),
+          rightAngleRad: Number(right.toFixed(4)),
+        });
+      } finally {
+        sim.dispose();
+      }
+    }
+    assert(samples[0].leftAngleRad > samples[1].leftAngleRad,
+      `${definition.name}: steering did not progressively reduce with speed`);
+    assert(samples[1].leftAngleRad > samples[2].leftAngleRad,
+      `${definition.name}: steering did not remain speed-sensitive at 100 km/h`);
+    assert(samples[1].leftAngleRad >= 0.1,
+      `${definition.name}: steering authority remained too low at 50 km/h (${samples[1].leftAngleRad} rad)`);
+    assert(samples[2].leftAngleRad >= 0.02,
+      `${definition.name}: steering authority collapsed at 100 km/h (${samples[2].leftAngleRad} rad)`);
+    return { vehicle: definition.name, samples, result: 'PASS' };
+  }
+
   function runWheelPhysicsRegression(definition) {
     const sim = createSimulation(definition, false, FIXED_DT);
     try {
@@ -624,6 +667,7 @@ try {
     runNeutralClutchEngineBrakeAndHandbrakeRegression(defaultVehicle),
   ];
   const steeringRuns = VEHICLE_CATALOGUE.map(runSteeringRegression);
+  const speedSensitiveSteeringRuns = VEHICLE_CATALOGUE.map(runSpeedSensitiveSteeringRegression);
   const wheelPhysicsRuns = VEHICLE_CATALOGUE.map(runWheelPhysicsRegression);
   const perGearRuns = VEHICLE_CATALOGUE.map(runPerGearMechanicalChecks);
 
@@ -692,6 +736,7 @@ try {
     scenarioRuns,
     transmissionControlRuns,
     steeringRuns,
+    speedSensitiveSteeringRuns,
     wheelPhysicsRuns,
     perGearRuns,
     timestepRuns,
@@ -704,6 +749,8 @@ try {
       transmissionControlRunsFailed: 0,
       steeringRunsPassed: steeringRuns.length,
       steeringRunsFailed: 0,
+      speedSensitiveSteeringRunsPassed: speedSensitiveSteeringRuns.length,
+      speedSensitiveSteeringRunsFailed: 0,
       wheelPhysicsRunsPassed: wheelPhysicsRuns.length,
       wheelPhysicsRunsFailed: 0,
       timestepRunsPassed: timestepRuns.length,
