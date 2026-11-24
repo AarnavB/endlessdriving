@@ -25,6 +25,7 @@ const ODOMETER_KEY = 'endless-driving-vehicle-odometers-v1';
 
 const NEUTRAL_INPUT: InputState = {
   throttle: 0, brake: 0, steer: 0, handbrake: false,
+  neutralPressed: false, clutchPedal: 0,
   shiftUpPressed: false, shiftDownPressed: false,
 };
 
@@ -215,20 +216,22 @@ export class VehicleController {
     // RPM through the selected gear, final drive and transfer reduction.
     const wheelRpm = Math.abs(signedSpeed) / (2 * Math.PI * profile.wheelRadiusM) * 60;
     const rawCoupledRpm = coupledGear === 0 ? idleRpm : wheelRpm * totalReduction;
-    const clutchBlend = this.gear === 0
+    // The pedal controls a progressive friction-clutch engagement curve:
+    // 0 is fully clamped, 1 is fully disengaged. A small dead band keeps the
+    // bite point predictable while the middle of the pedal travel is smooth.
+    const clutchPedal = THREE.MathUtils.clamp(input.clutchPedal ?? 0, 0, 1);
+    const clutchEngagement = this.gear === 0
       ? 0
-      : THREE.MathUtils.smoothstep(Math.abs(signedSpeed), 0.35, 4.2);
-    const clutchEngagement = this.gear === 0 ? 0 : THREE.MathUtils.lerp(0.34, 1, clutchBlend);
-    const launchRpm = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.28;
-    const freeRevTarget = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.72;
+      : 1 - THREE.MathUtils.smoothstep(clutchPedal, 0.08, 0.92);
+    const freeRevTarget = idleRpm + this.driveThrottle * (this.definition.maxRpm - idleRpm) * 0.93;
     const coupledTargetRpm = THREE.MathUtils.clamp(rawCoupledRpm, idleRpm, this.definition.maxRpm);
-    const targetRpm = this.gear === 0
-      ? freeRevTarget
-      : THREE.MathUtils.lerp(launchRpm, coupledTargetRpm, clutchBlend);
+    const targetRpm = this.gear === 0 || clutchEngagement < 0.999
+      ? THREE.MathUtils.lerp(freeRevTarget, coupledTargetRpm, clutchEngagement)
+      : coupledTargetRpm;
 
-    // Once the clutch is locked, RPM is an exact consequence of wheel speed.
-    // During launch and neutral, the engine spools toward its free/coupled target.
-    this.rpm = clutchBlend >= 0.999 && this.gear !== 0
+    // With the clutch clamped, engine speed follows wheel speed through the
+    // selected ratios. Depressing the pedal lets the engine free-rev independently.
+    this.rpm = clutchEngagement >= 0.999 && this.gear !== 0
       ? coupledTargetRpm
       : THREE.MathUtils.damp(this.rpm, targetRpm, input.throttle > 0 ? 14 : 9, safeDt);
 
@@ -240,15 +243,38 @@ export class VehicleController {
     const ratedPowerW = this.definition.powerHp * 745.699872;
     const powerLimitedTorqueNm = ratedPowerW / angularSpeedRadPerSecond;
     const usableCrankTorqueNm = Math.min(crankshaftTorqueNm, powerLimitedTorqueNm);
-    const wheelTorqueNm = usableCrankTorqueNm
-      * totalReduction
-      * drivelineEfficiency
-      * clutchEngagement
-      * (profile.hybridAssist ?? 1);
-    const requestedWheelForce = wheelTorqueNm / profile.wheelRadiusM;
+    const normalizedRpm = THREE.MathUtils.clamp(torqueRpm / this.definition.maxRpm, 0, 1);
+    const lowSpeedCreep = Math.abs(signedSpeed) < 3.2 && rawCoupledRpm < idleRpm * 1.18;
+    let transmittedCrankTorqueNm = 0;
+    let engineBrakeForce = 0;
 
-    // Limit torque at the ratio-derived redline, without imposing a vehicle
-    // speed cap. Coasting inertia can carry speed independently of propulsion.
+    // Closed-throttle torque at idle is retained only near idle speed, allowing
+    // the clutch to transmit genuine creep force through the driven tyres.
+    // Above idle, overrun torque becomes negative crankshaft torque and is
+    // transmitted through the selected gear rather than a wheel-brake shortcut.
+    if (this.gear !== 0 && clutchEngagement > 0.001 && !reverseMode) {
+      if (this.driveThrottle > 0.015) {
+        const requestedCrankTorque = THREE.MathUtils.lerp(
+          profile.idleTorqueNm, usableCrankTorqueNm, this.driveThrottle,
+        );
+        transmittedCrankTorqueNm = Math.min(requestedCrankTorque, profile.clutchCapacityNm)
+          * clutchEngagement;
+      } else if (lowSpeedCreep) {
+        transmittedCrankTorqueNm = Math.min(profile.idleTorqueNm, profile.clutchCapacityNm)
+          * clutchEngagement;
+      } else if (Math.abs(signedSpeed) > 0.2) {
+        const overrunCrankTorque = profile.engineBrakeTorqueNm
+          * THREE.MathUtils.lerp(0.62, 1, normalizedRpm);
+        engineBrakeForce = -Math.sign(signedSpeed) * Math.min(
+          profile.maxDriveForce * 0.28,
+          overrunCrankTorque * totalReduction * drivelineEfficiency
+            * clutchEngagement / profile.wheelRadiusM,
+        );
+      }
+    }
+
+    const requestedWheelForce = transmittedCrankTorqueNm * totalReduction
+      * drivelineEfficiency * (profile.hybridAssist ?? 1) / profile.wheelRadiusM;
     const limiterRpm = Math.max(this.rpm, rawCoupledRpm);
     const revLimiter = this.gear === 0
       ? 1
@@ -259,18 +285,14 @@ export class VehicleController {
       );
     const engineForce = this.gear === 0
       ? 0
-      : Math.max(
-        0,
-        Math.min(profile.maxDriveForce, requestedWheelForce)
-          * this.driveThrottle * revLimiter,
-      );
+      : THREE.MathUtils.clamp(requestedWheelForce, 0, profile.maxDriveForce) * revLimiter;
 
     const drivenWheels = this.definition.drivetrain.toLowerCase().includes('all-wheel')
       ? [0, 1, 2, 3]
       : [0, 2];
     // Rapier applies half of each wheel's longitudinal impulse.
     // Divide the vehicle-level target force across driven wheels accordingly.
-    const drivePerWheel = engineForce * 2 / drivenWheels.length;
+    const drivePerWheel = (engineForce + engineBrakeForce) * 2 / drivenWheels.length;
     const braking = input.brake > 0 && !reverseMode;
     const reverseSpeedLimit = 6; // 21.6 km/h; independent of forward gear ratios.
     const reverseForce = reverseMode && signedSpeed > -reverseSpeedLimit
@@ -323,10 +345,7 @@ export class VehicleController {
     }
     // Rapier's wheelBrake argument is a per-step impulse, not a force in N.
     const baseBrake = braking ? profile.brakeForce * input.brake * safeDt / 4 : 0;
-    const coastBrake = this.driveThrottle < 0.015 && input.brake === 0 && this.gear !== 0
-      ? profile.engineBrakeForce * 0.22 * safeDt / drivenWheels.length
-      : 0;
-    const handbrakeImpulse = this.handbrake ? profile.brakeForce * 0.62 * safeDt / 2 : 0;
+    const handbrakeImpulse = this.handbrake ? profile.brakeForce * 0.72 * safeDt / 2 : 0;
 
     for (let i = 0; i < 4; i++) {
       const driven = drivenWheels.includes(i);
@@ -334,8 +353,7 @@ export class VehicleController {
       this.wheelController.setWheelEngineForce(i, driven ? wheelDriveForce : 0);
       this.wheelController.setWheelBrake(
         i,
-        baseBrake + (this.handbrake && !front ? handbrakeImpulse : 0)
-          + (driven ? coastBrake : 0),
+        baseBrake + (this.handbrake && !front ? handbrakeImpulse : 0),
       );
       this.wheelController.setWheelSteering(
         i,
@@ -367,7 +385,7 @@ export class VehicleController {
 
     // Reverse is transmitted through the driven tyres above; do not add a
     // second chassis-level force, which bypasses tyre contact and traction.
-    this.lastAppliedForwardForce = reverseMode ? reverseForce : (braking ? 0 : engineForce);
+    this.lastAppliedForwardForce = reverseMode ? reverseForce : (braking ? 0 : engineForce + engineBrakeForce);
 
     if (reverseMode && !this.reverseAudioLatched) {
       this.shiftEvents.push({
@@ -418,6 +436,7 @@ export class VehicleController {
       rpm: this.rpm,
       gear: this.gear,
       gearLabel: this.gear === 0 ? 'N' : this.reverseEngaged ? 'R' : String(this.gear),
+      handbrakeActive: this.handbrake,
       transmissionMode: this.manualTransmission ? 'MANUAL' : 'AUTO',
       throttle: this.lastInput.throttle,
       steer: this.lastInput.steer,
@@ -657,6 +676,12 @@ export class VehicleController {
   }
 
   private updateTransmission(input: InputState, signedSpeed: number): void {
+    if (input.neutralPressed) {
+      this.changeGear(0, signedSpeed, false);
+      this.reverseEngaged = false;
+      this.brakeToReverseTime = 0;
+      return;
+    }
     const gearCount = this.definition.physics.gearRatios.length;
     if (this.manualTransmission) {
       if (input.shiftUpPressed && this.gear < gearCount) {
