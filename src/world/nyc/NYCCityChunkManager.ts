@@ -825,6 +825,8 @@ export class NYCCityChunkManager {
   }
 
   private addUnderpassShell(group: THREE.Group, centerX: number, centerZ: number): void {
+    const halfWidth = this.graph.getRoadProfile('z', 0).widthM * 0.5 + 0.9;
+    const fullWidth = halfWidth * 2;
     const addBox = (name: string, x: number, y: number, z: number,
       width: number, height: number, depth: number, material: THREE.Material): void => {
       const mesh = new THREE.Mesh(this.unitBox, material);
@@ -838,7 +840,7 @@ export class NYCCityChunkManager {
     // A short concrete box underpass is aligned to the north/south street.
     // The bridge soffit is the overhead clearance surface; this liner provides
     // retaining walls, portal frames and low-intensity ceiling illumination.
-    addBox('underpass-ceiling-liner', 0, 5.72, 320, 20.4, 0.36, 80, this.underpassMaterial);
+    addBox('underpass-ceiling-liner', 0, 5.72, 320, fullWidth, 0.36, 80, this.underpassMaterial);
     // Retaining walls stop short of the at-grade crossing at z=320. The
     // transverse street stays open while the north/south underpass continues
     // beneath the deck; closing this gap would create an invisible roadblock.
@@ -846,13 +848,13 @@ export class NYCCityChunkManager {
       ['north', 294, 28],
       ['south', 346, 28],
     ] as const) {
-      addBox('underpass-west-retaining-wall-' + section, -10.2, 2.9, centreZ,
+      addBox('underpass-west-retaining-wall-' + section, -halfWidth, 2.9, centreZ,
         0.65, 5.8, length, this.bridgeConcreteMaterial);
-      addBox('underpass-east-retaining-wall-' + section, 10.2, 2.9, centreZ,
+      addBox('underpass-east-retaining-wall-' + section, halfWidth, 2.9, centreZ,
         0.65, 5.8, length, this.bridgeConcreteMaterial);
     }
-    addBox('underpass-north-portal-header', 0, 5.35, 280, 20.4, 0.72, 0.8, this.bridgeConcreteMaterial);
-    addBox('underpass-south-portal-header', 0, 5.35, 360, 20.4, 0.72, 0.8, this.bridgeConcreteMaterial);
+    addBox('underpass-north-portal-header', 0, 5.35, 280, fullWidth, 0.72, 0.8, this.bridgeConcreteMaterial);
+    addBox('underpass-south-portal-header', 0, 5.35, 360, fullWidth, 0.72, 0.8, this.bridgeConcreteMaterial);
     for (let i = 0; i < 5; i++) {
       addBox('underpass-ceiling-luminaire-' + i, 0, 5.48, 292 + i * 14,
         1.2, 0.08, 0.34, this.underpassLightMaterial);
@@ -860,8 +862,9 @@ export class NYCCityChunkManager {
   }
 
   private addUnderpassColliders(body: RAPIER.RigidBody, centerX: number, centerZ: number): void {
+    const halfWidth = this.graph.getRoadProfile('z', 0).widthM * 0.5 + 0.9;
     this.physics.createCollider(
-      RAPIER.ColliderDesc.cuboid(10.2, 0.18, 40)
+      RAPIER.ColliderDesc.cuboid(halfWidth, 0.18, 40)
         .setTranslation(-centerX, 5.72, 320 - centerZ).setFriction(0.65),
       body,
     );
@@ -869,7 +872,7 @@ export class NYCCityChunkManager {
       for (const wallCentreZ of [294, 346]) {
         this.physics.createCollider(
           RAPIER.ColliderDesc.cuboid(0.325, 2.9, 14)
-            .setTranslation(side * 10.2 - centerX, 2.9, wallCentreZ - centerZ).setFriction(0.8),
+            .setTranslation(side * halfWidth - centerX, 2.9, wallCentreZ - centerZ).setFriction(0.8),
           body,
         );
       }
