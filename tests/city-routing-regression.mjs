@@ -335,8 +335,10 @@ try {
   assert(/for \(const barrier of barrierSpecs\)/.test(managerSource)
     && /setRotation\(\{ x: rotation\.x, y: rotation\.y, z: rotation\.z, w: rotation\.w \}\)/.test(managerSource),
     'bridge and ramp guardrails have matching rotated collision shapes');
-  assert(/underpass-west-retaining-wall-north/.test(managerSource)
-    && /underpass-west-retaining-wall-south/.test(managerSource),
+  assert(/underpass-west-retaining-wall-' \+ section/.test(managerSource)
+    && /'north', 294, 28/.test(managerSource)
+    && /'south', 346, 28/.test(managerSource)
+    && /wallCentreZ of \[294, 346\]/.test(managerSource),
     'underpass retaining walls leave the transverse at-grade crossing clear');
   assert(/rightOfWaySegments/.test(managerSource)
     && /intersectsElevatedRightOfWay/.test(managerSource),
