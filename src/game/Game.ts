@@ -28,6 +28,7 @@ export class Game {
   private readonly clock = new THREE.Clock();
   private readonly fixedTimeStep = 1 / 60;
   private physicsAccumulator = 0;
+  private roadPitchSampleTicks = 0;
   private latestTelemetry: VehicleTelemetry | null = null;
   private readonly roadGraph = new CityRoadGraph(20261124);
   private readonly worldOffset = new THREE.Vector3();
@@ -308,10 +309,18 @@ export class Game {
         ? currentInput
         : { ...currentInput, shiftUpPressed: false, shiftDownPressed: false };
 
+      // Sample the graph grade at 10 Hz, then smoothly apply it in the
+      // vehicle controller at the physics rate. This avoids a per-frame
+      // nearest-road graph scan while preserving ramp pitch alignment.
+      const playerPosition = this.vehicle.getPosition(this.trafficPlayerPosition);
+      if (this.roadPitchSampleTicks++ % 6 === 0) {
+        this.vehicle.setRoadTangent(this.getRoadHeadingAt(playerPosition));
+      }
+
       // Controls and forces are prepared before this fixed solver tick.
       this.vehicle.update(this.fixedTimeStep, tickInput);
       for (const event of this.vehicle.drainShiftEvents()) this.audio.playShiftEvent(event);
-      this.traffic.update(this.fixedTimeStep, this.vehicle.getPosition(this.trafficPlayerPosition));
+      this.traffic.update(this.fixedTimeStep, playerPosition);
       this.physics.step();
       this.vehicle.syncVisual();
       this.traffic.syncVisuals();
