@@ -54,6 +54,7 @@ export class VehicleController {
   readonly definition: VehicleDefinition;
   private readonly wheelMeshes: VehicleWheelVisual[];
   private gear = 1;
+  private gearBeforeNeutral = 1;
   private rpm: number;
   private speedMps = 0;
   private smoothedSteer = 0;
@@ -138,6 +139,32 @@ export class VehicleController {
 
   setManualTransmission(enabled: boolean): void {
     this.manualTransmission = enabled;
+  }
+
+  /**
+   * Toggle neutral on/off. Manual mode restores the last forward ratio;
+   * automatic mode selects a speed- and load-appropriate ratio. A gear that
+   * would mechanically over-rev the engine is never re-engaged.
+   */
+  toggleNeutral(signedSpeed = this.getSignedForwardSpeed()): void {
+    this.reverseEngaged = false;
+    this.brakeToReverseTime = 0;
+    this.reverseAudioLatched = false;
+
+    if (this.gear !== 0) {
+      this.changeGear(0, signedSpeed, false);
+      return;
+    }
+
+    const restoredGear = this.manualTransmission
+      ? this.gearBeforeNeutral
+      : this.getAutomaticGearForCurrentSpeed(
+          Math.abs(signedSpeed),
+          THREE.MathUtils.clamp(Math.max(this.lastInput.throttle, this.driveThrottle), 0, 1),
+        );
+    if (restoredGear > 0) {
+      this.changeGear(restoredGear, signedSpeed, !this.manualTransmission);
+    }
   }
 
   /** Select neutral (0) or a forward gear (1 through this vehicle's gear count). */
@@ -629,6 +656,64 @@ export class VehicleController {
     return points[points.length - 1][1];
   }
 
+  /**
+   * Select an automatic ratio for re-engagement from neutral. At light load,
+   * target a relaxed cruising RPM; as throttle demand rises, move the target
+   * toward the engine's peak-power region. The torque curve determines that
+   * region, and candidate gears are rejected if they would exceed redline.
+   */
+  private getAutomaticGearForCurrentSpeed(speedMps: number, throttle: number): number {
+    const profile = this.definition.physics;
+    const maxRpm = this.definition.maxRpm;
+    const idleRpm = Math.min(1200, Math.max(700, maxRpm * 0.12));
+    const speed = Math.max(0, speedMps);
+    if (speed < 0.75) return 1;
+
+    let peakPowerRatio = 0.65;
+    let peakPower = 0;
+    for (let step = 15; step <= 95; step++) {
+      const rpmRatio = step / 100;
+      const relativePower = rpmRatio * this.getTorqueFactor(rpmRatio * maxRpm);
+      if (relativePower > peakPower) {
+        peakPower = relativePower;
+        peakPowerRatio = rpmRatio;
+      }
+    }
+
+    const demand = THREE.MathUtils.clamp(throttle, 0, 1);
+    const downshiftThreshold = Math.max(1850, maxRpm * 0.28);
+    const upshiftThreshold = maxRpm * THREE.MathUtils.lerp(0.74, 0.91, demand);
+    const cruiseTargetRpm = Math.max(downshiftThreshold * 1.08, maxRpm * 0.36);
+    const powerTargetRpm = Math.min(
+      upshiftThreshold * 0.88,
+      maxRpm * peakPowerRatio * 0.92,
+    );
+    const targetRpm = THREE.MathUtils.lerp(
+      cruiseTargetRpm,
+      Math.max(cruiseTargetRpm, powerTargetRpm),
+      demand,
+    );
+
+    let selectedGear = 0;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (let gear = 1; gear <= profile.gearRatios.length; gear++) {
+      const projectedRpm = this.calculateRawCoupledRpm(gear, speed);
+      if (!Number.isFinite(projectedRpm) || projectedRpm > maxRpm * 0.985) continue;
+
+      const rpmForScoring = Math.max(projectedRpm, idleRpm);
+      const rpmDistance = Math.abs(Math.log(rpmForScoring / targetRpm));
+      const lugPenalty = projectedRpm < downshiftThreshold
+        ? (downshiftThreshold - projectedRpm) / downshiftThreshold * 1.5
+        : 0;
+      const score = rpmDistance + lugPenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        selectedGear = gear;
+      }
+    }
+    return selectedGear;
+  }
+
   private getSignedForwardSpeed(): number {
     const q = this.body.rotation();
     this.scratchQuat.set(q.x, q.y, q.z, q.w);
@@ -643,8 +728,11 @@ export class VehicleController {
     const targetRpm = nextGear === 0
       ? this.rpm
       : this.calculateRawCoupledRpm(nextGear, Math.abs(signedSpeed));
-    // Reject any downshift that would mechanically overspeed the engine.
-    if (nextGear < previousGear && nextGear > 0 && targetRpm > this.definition.maxRpm * 0.985) return;
+    // Reject downshifts and neutral re-engagements that would mechanically
+    // overspeed the engine at the current road speed.
+    if (nextGear > 0
+      && (previousGear === 0 || nextGear < previousGear)
+      && targetRpm > this.definition.maxRpm * 0.985) return;
 
     let direction: VehicleShiftEvent['direction'] = 'neutral';
     let type: ShiftEventType = 'neutral';
@@ -663,6 +751,8 @@ export class VehicleController {
     }
 
     this.gear = nextGear;
+    if (nextGear === 0 && previousGear > 0) this.gearBeforeNeutral = previousGear;
+    else if (nextGear > 0) this.gearBeforeNeutral = nextGear;
     this.lastShiftAt = this.simulationTimeMs;
     this.shiftEvents.push({
       previousGear,
@@ -677,9 +767,7 @@ export class VehicleController {
 
   private updateTransmission(input: InputState, signedSpeed: number): void {
     if (input.neutralPressed) {
-      this.changeGear(0, signedSpeed, false);
-      this.reverseEngaged = false;
-      this.brakeToReverseTime = 0;
+      this.toggleNeutral(signedSpeed);
       return;
     }
     const gearCount = this.definition.physics.gearRatios.length;
