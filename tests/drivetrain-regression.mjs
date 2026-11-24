@@ -535,11 +535,23 @@ try {
     for (const speedKmh of speedsKmh) {
       const sim = createSimulation(definition, false, FIXED_DT);
       try {
+        const targetSpeedMps = speedKmh / 3.6;
+        let accelerationFrames = 0;
+        // Establish tyre rolling state through the real gearbox and wheel
+        // controller. Teleporting chassis velocity leaves stationary ray-cast
+        // wheels behind, which can scrub away the test speed before sampling.
+        while (sim.vehicle.getTelemetry().speedMps < targetSpeedMps
+          && accelerationFrames < 1200) {
+          sim.step(FORWARD_INPUT);
+          accelerationFrames++;
+        }
+        const achievedSpeedMps = sim.vehicle.getTelemetry().speedMps;
+        assert(achievedSpeedMps >= targetSpeedMps * 0.95,
+          `${definition.name}: failed to establish ${speedKmh} km/h rolling speed (achieved ${(achievedSpeedMps * 3.6).toFixed(1)} km/h)`);
         sim.vehicle.selectGear(0);
-        sim.vehicle.body.setLinvel({ x: 0, y: 0, z: speedKmh / 3.6 }, true);
         let sample;
-        // Allow the speed-sensitive rack filter to settle before measuring
-        // physical wheel angles.
+        // Allow the speed-sensitive rack filter to settle in neutral while
+        // the initialized wheel rotation continues to match road speed.
         for (let frame = 0; frame < 36; frame++) {
           sample = sim.step({ ...NEUTRAL_INPUT, steer: 1 });
         }
