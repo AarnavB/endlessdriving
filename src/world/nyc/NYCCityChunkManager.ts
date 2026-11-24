@@ -1031,7 +1031,7 @@ export class NYCCityChunkManager {
       const ramp = this.graph.getSegment(edge.segmentId);
       if (ramp.roadType !== 'entrance-ramp' && ramp.roadType !== 'exit-ramp') continue;
       const rampPose = this.graph.getCenterlinePose(
-        ramp.id, Math.min(12, ramp.lengthM), edge.direction,
+        ramp.id, Math.min(40, ramp.lengthM), edge.direction,
       );
       const lateral = (rampPose.position.x - deckPose.position.x) * deckPose.right.x
         + (rampPose.position.y - deckPose.position.y) * deckPose.right.y
@@ -1048,8 +1048,8 @@ export class NYCCityChunkManager {
     endpointDistanceM: number,
   ): number | null {
     const rampSampleDistance = endpointDistanceM === 0
-      ? Math.min(12, segment.lengthM)
-      : Math.max(0, segment.lengthM - 12);
+      ? Math.min(40, segment.lengthM)
+      : Math.max(0, segment.lengthM - 40);
     const rampPose = this.graph.getCenterlinePose(segment.id, rampSampleDistance);
     for (const edge of this.graph.getOutgoingEdges(nodeId)) {
       if (edge.segmentId === segment.id) continue;

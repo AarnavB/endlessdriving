@@ -479,7 +479,7 @@ export class CityRoadGraph {
         incomingSegment.id, incomingSegment.lengthM, incomingEdge.direction,
       );
       const rampPose = this.getCenterlinePose(
-        outgoingSegment.id, Math.min(8, outgoingSegment.lengthM), outgoingEdge.direction,
+        outgoingSegment.id, Math.min(40, outgoingSegment.lengthM), outgoingEdge.direction,
       );
       const lateral = (rampPose.position.x - deckPose.position.x) * deckPose.right.x
         + (rampPose.position.y - deckPose.position.y) * deckPose.right.y
