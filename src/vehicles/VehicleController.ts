@@ -296,7 +296,7 @@ export class VehicleController {
     const braking = input.brake > 0 && !reverseMode;
     const reverseSpeedLimit = 6; // 21.6 km/h; independent of forward gear ratios.
     const reverseForce = reverseMode && signedSpeed > -reverseSpeedLimit
-      ? -profile.maxDriveForce * 0.22 * input.brake * torqueFactor
+      ? -profile.maxDriveForce * 0.22 * input.brake * torqueFactor * clutchEngagement
       : 0;
     // Rapier's wheel engine force is signed: negative force drives the tyres
     // backward through the same contact/friction solver as forward propulsion.
@@ -309,7 +309,7 @@ export class VehicleController {
     // to a conservative fraction of gravity so a digital steering input
     // cannot abruptly rotate the chassis at speed.
     const steeringWheelbase = this.definition.visual.wheelBase;
-    const maxLateralAcceleration = 0.72 * 9.81;
+    const maxLateralAcceleration = profile.maxLateralAccelerationG * 9.81;
     const dynamicSteerLimit = Math.atan(
       (steeringWheelbase * maxLateralAcceleration) / (this.speedMps * this.speedMps + 1.5),
     );
