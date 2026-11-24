@@ -47,6 +47,12 @@ jobs:
         run: npm run test:nyc-geo
         continue-on-error: true
 
+      - name: NYC district and spatial placement regressions
+        id: city_urban
+        if: always()
+        run: npm run test:city-urban
+        continue-on-error: true
+
       - name: City graph and routing regressions
         id: city_routing
         if: always()
@@ -65,16 +71,19 @@ jobs:
           BUILD_RESULT: ${{ steps.build.outcome }}
           DRIVETRAIN_RESULT: ${{ steps.drivetrain.outcome }}
           NYC_GEO_RESULT: ${{ steps.nyc_geo.outcome }}
+          CITY_URBAN_RESULT: ${{ steps.city_urban.outcome }}
           CITY_ROUTING_RESULT: ${{ steps.city_routing.outcome }}
           WORLD_RESULT: ${{ steps.world.outcome }}
         run: |
           printf 'build: %s\n' "$BUILD_RESULT"
           printf 'test:drivetrain: %s\n' "$DRIVETRAIN_RESULT"
           printf 'test:nyc-geo: %s\n' "$NYC_GEO_RESULT"
+          printf 'test:city-urban: %s\n' "$CITY_URBAN_RESULT"
           printf 'test:city-routing: %s\n' "$CITY_ROUTING_RESULT"
           printf 'test:world: %s\n' "$WORLD_RESULT"
           test "$BUILD_RESULT" = success
           test "$DRIVETRAIN_RESULT" = success
           test "$NYC_GEO_RESULT" = success
+          test "$CITY_URBAN_RESULT" = success
           test "$CITY_ROUTING_RESULT" = success
           test "$WORLD_RESULT" = success
