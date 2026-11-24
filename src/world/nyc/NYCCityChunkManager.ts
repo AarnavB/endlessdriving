@@ -118,6 +118,17 @@ export class NYCCityChunkManager {
   private readonly buildingMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff, roughness: 0.76, metalness: 0.08,
   });
+  private readonly storefrontMaterial = new THREE.MeshStandardMaterial({
+    color: 0x263943, roughness: 0.24, metalness: 0.42,
+    emissive: 0x10232d, emissiveIntensity: 0.18,
+  });
+  private readonly storefrontFrameMaterial = new THREE.MeshStandardMaterial({
+    color: 0x252c31, roughness: 0.58, metalness: 0.72,
+  });
+  private readonly retailSignMaterial = new THREE.MeshStandardMaterial({
+    color: 0xd9b887, roughness: 0.7, metalness: 0.12,
+    emissive: 0x3f2412, emissiveIntensity: 0.2,
+  });
   private readonly windowMaterial = new THREE.MeshStandardMaterial({
     color: 0x49616e, roughness: 0.3, metalness: 0.42,
     emissive: 0x152632, emissiveIntensity: 0.12,
@@ -216,7 +227,8 @@ export class NYCCityChunkManager {
     this.desired.clear();
     for (const material of [
       this.groundMaterial, this.roadMaterial, this.sidewalkMaterial, this.lineMaterial, this.centreLineMaterial,
-      this.curbMaterial, this.buildingMaterial, this.windowMaterial, this.rooftopMaterial,
+      this.curbMaterial, this.buildingMaterial, this.storefrontMaterial, this.storefrontFrameMaterial,
+      this.retailSignMaterial, this.windowMaterial, this.rooftopMaterial,
       this.poleMaterial, this.lampMaterial, this.treeMaterial,
     ]) material.dispose();
     this.unitBox.dispose();
@@ -400,6 +412,9 @@ export class NYCCityChunkManager {
     const buildingSpecs = this.collectBuildings(minX, maxX, minZ, maxZ);
     const buildingMesh = new THREE.InstancedMesh(this.unitBox, this.buildingMaterial, buildingSpecs.length);
     const windows: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
+    const storefronts: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
+    const storefrontFrames: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
+    const retailSigns: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
     const rooftops: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
     for (let i = 0; i < buildingSpecs.length; i++) {
       const b = buildingSpecs[i];
@@ -407,6 +422,46 @@ export class NYCCityChunkManager {
       const floors = Math.min(25, Math.max(2, Math.floor(b.height / 3.6)));
       const colsX = Math.min(6, Math.max(2, Math.floor(b.width / 5)));
       const colsZ = Math.min(6, Math.max(2, Math.floor(b.depth / 5)));
+
+      // Street-level shopfront glazing and sign bands are distinct from the
+      // repeated upper-floor windows. These are attached to all four public
+      // block faces, giving the sidewalk a readable ground-storey frontage.
+      const shopPanelsX = Math.max(3, Math.floor(b.width / 12));
+      const shopPanelsZ = Math.max(3, Math.floor(b.depth / 12));
+      const shopWidthX = (b.width - 2.4) / shopPanelsX;
+      const shopWidthZ = (b.depth - 2.4) / shopPanelsZ;
+      for (let panel = 0; panel < shopPanelsX; panel++) {
+        const x = b.x - centerX - b.width * 0.5 + 1.2 + (panel + 0.5) * shopWidthX;
+        for (const side of [-1, 1]) {
+          const z = b.z - centerZ + side * (b.depth * 0.5 + 0.055);
+          storefronts.push({ x, y: 1.72, z, w: shopWidthX - 0.55, h: 2.28, d: 0.09 });
+          storefrontFrames.push({ x, y: 0.55, z, w: shopWidthX - 0.3, h: 0.1, d: 0.16 });
+          storefrontFrames.push({ x, y: 2.88, z, w: shopWidthX - 0.3, h: 0.12, d: 0.16 });
+        }
+      }
+      for (let panel = 0; panel < shopPanelsZ; panel++) {
+        const z = b.z - centerZ - b.depth * 0.5 + 1.2 + (panel + 0.5) * shopWidthZ;
+        for (const side of [-1, 1]) {
+          const x = b.x - centerX + side * (b.width * 0.5 + 0.055);
+          storefronts.push({ x, y: 1.72, z, w: 0.09, h: 2.28, d: shopWidthZ - 0.55 });
+          storefrontFrames.push({ x, y: 0.55, z, w: 0.16, h: 0.1, d: shopWidthZ - 0.3 });
+          storefrontFrames.push({ x, y: 2.88, z, w: 0.16, h: 0.12, d: shopWidthZ - 0.3 });
+        }
+      }
+      // A restrained continuous sign band gives each block a retail datum
+      // without inventing copied brand names or storefront text.
+      for (const side of [-1, 1]) {
+        retailSigns.push({
+          x: b.x - centerX, y: 3.18,
+          z: b.z - centerZ + side * (b.depth * 0.5 + 0.08),
+          w: b.width * 0.72, h: 0.42, d: 0.12,
+        });
+        retailSigns.push({
+          x: b.x - centerX + side * (b.width * 0.5 + 0.08), y: 3.18,
+          z: b.z - centerZ, w: 0.12, h: 0.42, d: b.depth * 0.72,
+        });
+      }
+
       for (let floor = 1; floor < floors; floor++) {
         const y = floor * 3.55;
         for (let col = 0; col < colsX; col++) {
@@ -420,17 +475,52 @@ export class NYCCityChunkManager {
           windows.push({ x: b.x - centerX - b.width * 0.5 - 0.045, y, z, w: 0.065, h: 1.25, d: 1.05 });
         }
       }
-      if (b.height > 48) rooftops.push({
-        x: b.x - centerX + b.width * 0.12,
-        y: b.height + 1.1,
-        z: b.z - centerZ,
-        w: Math.min(8, b.width * 0.3), h: 2.2, d: Math.min(7, b.depth * 0.25),
-      });
+      if (b.height > 48) {
+        // Grouped rooftop plant reads as HVAC/utility equipment from street level.
+        for (const unit of [-1, 0, 1]) rooftops.push({
+          x: b.x - centerX + b.width * 0.12 + unit * Math.min(5, b.width * 0.13),
+          y: b.height + 1.1,
+          z: b.z - centerZ,
+          w: Math.min(4.6, b.width * 0.2), h: 2.2, d: Math.min(4.8, b.depth * 0.18),
+        });
+        rooftops.push({
+          x: b.x - centerX - b.width * 0.18, y: b.height + 4.1,
+          z: b.z - centerZ + b.depth * 0.12, w: 0.24, h: 6.0, d: 0.24,
+        });
+      }
     }
     buildingMesh.name = 'fictional-city-buildings';
     buildingMesh.castShadow = true;
     buildingMesh.receiveShadow = true;
     if (buildingSpecs.length > 0) group.add(buildingMesh);
+
+    if (storefronts.length > 0) {
+      const mesh = new THREE.InstancedMesh(this.unitBox, this.storefrontMaterial, storefronts.length);
+      for (let i = 0; i < storefronts.length; i++) {
+        const pane = storefronts[i];
+        setInstance(mesh, i, pane.x, pane.y, pane.z, pane.w, pane.h, pane.d);
+      }
+      mesh.name = 'street-level-retail-glazing';
+      group.add(mesh);
+    }
+    if (storefrontFrames.length > 0) {
+      const mesh = new THREE.InstancedMesh(this.unitBox, this.storefrontFrameMaterial, storefrontFrames.length);
+      for (let i = 0; i < storefrontFrames.length; i++) {
+        const frame = storefrontFrames[i];
+        setInstance(mesh, i, frame.x, frame.y, frame.z, frame.w, frame.h, frame.d);
+      }
+      mesh.name = 'street-level-retail-frames';
+      group.add(mesh);
+    }
+    if (retailSigns.length > 0) {
+      const mesh = new THREE.InstancedMesh(this.unitBox, this.retailSignMaterial, retailSigns.length);
+      for (let i = 0; i < retailSigns.length; i++) {
+        const sign = retailSigns[i];
+        setInstance(mesh, i, sign.x, sign.y, sign.z, sign.w, sign.h, sign.d);
+      }
+      mesh.name = 'street-level-retail-sign-bands';
+      group.add(mesh);
+    }
 
     if (windows.length > 0) {
       const mesh = new THREE.InstancedMesh(this.unitBox, this.windowMaterial, windows.length);
