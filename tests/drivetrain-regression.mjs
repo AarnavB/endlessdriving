@@ -10,6 +10,7 @@ const FORWARD_INPUT = {
 };
 const NEUTRAL_INPUT = {
   throttle: 0, brake: 0, steer: 0, handbrake: false,
+  neutralPressed: false, clutchPedal: 0,
   shiftUpPressed: false, shiftDownPressed: false,
 };
 const BRAKE_INPUT = { ...NEUTRAL_INPUT, brake: 1 };
@@ -274,6 +275,117 @@ try {
     }
   }
 
+  function runNeutralClutchEngineBrakeAndHandbrakeRegression(definition) {
+    const sim = createSimulation(definition, true, FIXED_DT);
+    try {
+      // N must disengage the current forward ratio, including when it is not
+      // first gear, and the engine must be able to free-rev without wheel force.
+      sim.vehicle.selectGear(definition.physics.gearRatios.length);
+      const neutral = sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
+      assert.equal(neutral.telemetry.gearLabel, 'N', 'N input did not select neutral from a forward gear');
+      for (let i = 0; i < 90; i++) {
+        const sample = sim.step(FORWARD_INPUT);
+        assert.equal(sample.telemetry.gearLabel, 'N', 'Neutral was not retained in manual mode');
+        assert(Math.abs(sample.debug.appliedForwardForce) < 1e-5, 'Neutral transmitted engine torque to the wheels');
+      }
+      assert(
+        sim.vehicle.getTelemetry().rpm > definition.maxRpm * 0.55,
+        'Engine did not free-rev in neutral under throttle',
+      );
+
+      // E engages first from neutral. With the clutch pedal depressed, engine
+      // RPM rises but no torque should reach the tyres.
+      sim.step({ ...NEUTRAL_INPUT, shiftUpPressed: true });
+      assert.equal(sim.vehicle.getTelemetry().gear, 1, 'E did not engage first gear from neutral');
+      sim.vehicle.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      for (let i = 0; i < 90; i++) {
+        const sample = sim.step({ ...FORWARD_INPUT, clutchPedal: 1 });
+        assert(Math.abs(sample.debug.appliedForwardForce) < 1e-5, 'Disengaged clutch transmitted wheel torque');
+      }
+      assert(
+        sim.vehicle.getTelemetry().rpm > definition.maxRpm * 0.55,
+        'Engine RPM did not respond while the clutch was disengaged',
+      );
+
+      // Releasing the clutch at idle must transmit engine torque mechanically
+      // and permit low-speed creep without throttle input.
+      for (let i = 0; i < 240; i++) sim.step(NEUTRAL_INPUT);
+      assert(
+        sim.vehicle.getTelemetry().speedMps > 0.12,
+        'Fully engaged clutch did not produce idle creep through the drivetrain',
+      );
+
+      // Neutral is reachable from every forward gear through the same edge.
+      for (let gear = 1; gear <= definition.physics.gearRatios.length; gear++) {
+        sim.vehicle.selectGear(gear);
+        const sample = sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
+        assert.equal(sample.telemetry.gearLabel, 'N', `N failed from forward gear ${gear}`);
+      }
+
+      // Select reverse using the established standstill brake gesture, then
+      // verify N cancels the reverse state without sending another wheel force.
+      sim.vehicle.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      for (let i = 0; i < 32; i++) sim.step(BRAKE_INPUT);
+      sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
+      assert.equal(sim.vehicle.getTelemetry().gearLabel, 'N', 'N failed to cancel reverse selection');
+
+      // Engine braking must be a negative driveline force in gear and vanish in
+      // neutral. Use matched speed and fixed-step simulations for comparison.
+      function coastSpeed(inGear) {
+        const coast = createSimulation(definition, true, FIXED_DT);
+        try {
+          for (let i = 0; i < 120; i++) coast.step(NEUTRAL_INPUT);
+          coast.vehicle.body.setLinvel({ x: 0, y: 0, z: 20 }, true);
+          coast.vehicle.selectGear(inGear ? 1 : 0);
+          for (let i = 0; i < 90; i++) coast.step(NEUTRAL_INPUT);
+          return coast.vehicle.getTelemetry().speedMps;
+        } finally {
+          coast.dispose();
+        }
+      }
+      const inGearCoastSpeed = coastSpeed(true);
+      const neutralCoastSpeed = coastSpeed(false);
+      assert(
+        inGearCoastSpeed + 0.25 < neutralCoastSpeed,
+        `Engine braking did not reduce speed in gear (gear=${inGearCoastSpeed.toFixed(2)}, neutral=${neutralCoastSpeed.toFixed(2)} m/s)`,
+      );
+
+      function handbrakeSpeed(active) {
+        const brakeSim = createSimulation(definition, true, FIXED_DT);
+        try {
+          for (let i = 0; i < 120; i++) brakeSim.step(NEUTRAL_INPUT);
+          brakeSim.vehicle.body.setLinvel({ x: 0, y: 0, z: 20 }, true);
+          for (let i = 0; i < 90; i++) {
+            const sample = brakeSim.step({ ...NEUTRAL_INPUT, handbrake: active });
+            if (active) assert.equal(sample.telemetry.handbrakeActive, true, 'HUD telemetry did not report handbrake active');
+          }
+          return brakeSim.vehicle.getTelemetry().speedMps;
+        } finally {
+          brakeSim.dispose();
+        }
+      }
+      const freeRollSpeed = handbrakeSpeed(false);
+      const handbrakeRollSpeed = handbrakeSpeed(true);
+      assert(
+        handbrakeRollSpeed + 0.5 < freeRollSpeed,
+        `Rear handbrake did not measurably slow the vehicle (handbrake=${handbrakeRollSpeed.toFixed(2)}, free=${freeRollSpeed.toFixed(2)} m/s)`,
+      );
+
+      return {
+        vehicle: definition.name,
+        neutralFromAllForwardGears: true,
+        clutchDisengagementStopsDrive: true,
+        idleCreepMps: Number(sim.vehicle.getTelemetry().speedMps.toFixed(2)),
+        engineBrakingMps: Number(inGearCoastSpeed.toFixed(2)),
+        neutralCoastMps: Number(neutralCoastSpeed.toFixed(2)),
+        handbrakeMps: Number(handbrakeRollSpeed.toFixed(2)),
+        result: 'PASS',
+      };
+    } finally {
+      sim.dispose();
+    }
+  }
+
   function runSteeringRegression(definition) {
     function runDirection(steer) {
       const sim = createSimulation(definition, false, FIXED_DT);
@@ -497,6 +609,9 @@ try {
 
   const defaultVehicle = VEHICLE_CATALOGUE[0];
   const scenarioRuns = [runCoastBrakeAndReverse(defaultVehicle)];
+  const transmissionControlRuns = [
+    runNeutralClutchEngineBrakeAndHandbrakeRegression(defaultVehicle),
+  ];
   const steeringRuns = VEHICLE_CATALOGUE.map(runSteeringRegression);
   const wheelPhysicsRuns = VEHICLE_CATALOGUE.map(runWheelPhysicsRegression);
   const perGearRuns = VEHICLE_CATALOGUE.map(runPerGearMechanicalChecks);
@@ -564,6 +679,7 @@ try {
     fixedTimestepSeconds: FIXED_DT,
     vehicleRuns,
     scenarioRuns,
+    transmissionControlRuns,
     steeringRuns,
     wheelPhysicsRuns,
     perGearRuns,
@@ -573,6 +689,8 @@ try {
       vehicleRunsFailed: 0,
       scenarioRunsPassed: scenarioRuns.length,
       scenarioRunsFailed: 0,
+      transmissionControlRunsPassed: transmissionControlRuns.length,
+      transmissionControlRunsFailed: 0,
       steeringRunsPassed: steeringRuns.length,
       steeringRunsFailed: 0,
       wheelPhysicsRunsPassed: wheelPhysicsRuns.length,
