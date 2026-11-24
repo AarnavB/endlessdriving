@@ -72,6 +72,9 @@ export class VehicleController {
   private readonly forward = new THREE.Vector3();
   private readonly velocity = new THREE.Vector3();
   private readonly scratchQuat = new THREE.Quaternion();
+  private targetRoadPitch = 0;
+  private appliedRoadPitch = 0;
+  private readonly roadPitchRotation = { x: 0, y: 0, z: 0, w: 1 };
   private handbrake = false;
   private manualTransmission = false;
   private driveThrottle = 0;
@@ -90,9 +93,9 @@ export class VehicleController {
       .setLinearDamping(0.018)
       .setAngularDamping(0.75)
       .setCanSleep(false)
-      // Permit pitch so the four suspension rays can follow ramp grades;
-      // roll remains locked to preserve the existing stable road handling.
-      .enabledRotations(true, true, false);
+      // Keep physics-driven chassis pitch/roll locked for stable handling.
+      // Road grade is applied explicitly from the same sampled 3D graph pose.
+      .enabledRotations(false, true, false);
     this.body = world.createRigidBody(bodyDesc);
     const collider = RAPIER.ColliderDesc.cuboid(definition.visual.bodyWidth * 0.48, 0.34, definition.visual.bodyLength * 0.46)
       .setMass(definition.physics.massKg)
@@ -177,6 +180,13 @@ export class VehicleController {
     this.changeGear(gear, speed, false);
   }
 
+  setRoadTangent(tangent: THREE.Vector3): void {
+    if (![tangent.x, tangent.y, tangent.z].every(Number.isFinite)) return;
+    const horizontalLength = Math.hypot(tangent.x, tangent.z);
+    if (horizontalLength < 1e-5) return;
+    this.targetRoadPitch = Math.atan2(tangent.y, horizontalLength);
+  }
+
   update(dt: number, input: InputState): VehicleTelemetry {
     const safeDt = THREE.MathUtils.clamp(dt, 1 / 240, 1 / 30);
     this.simulationTimeMs += safeDt * 1000;
@@ -184,6 +194,26 @@ export class VehicleController {
 
     const q = this.body.rotation();
     this.scratchQuat.set(q.x, q.y, q.z, q.w);
+    this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
+    const yaw = Math.atan2(this.forward.x, this.forward.z);
+    this.appliedRoadPitch = THREE.MathUtils.damp(
+      this.appliedRoadPitch, this.targetRoadPitch, 10, safeDt,
+    );
+    const halfYaw = yaw * 0.5;
+    const halfPitch = -this.appliedRoadPitch * 0.5;
+    const sinYaw = Math.sin(halfYaw);
+    const cosYaw = Math.cos(halfYaw);
+    const sinPitch = Math.sin(halfPitch);
+    const cosPitch = Math.cos(halfPitch);
+    this.roadPitchRotation.x = cosYaw * sinPitch;
+    this.roadPitchRotation.y = sinYaw * cosPitch;
+    this.roadPitchRotation.z = -sinYaw * sinPitch;
+    this.roadPitchRotation.w = cosYaw * cosPitch;
+    this.body.setRotation(this.roadPitchRotation, true);
+    this.scratchQuat.set(
+      this.roadPitchRotation.x, this.roadPitchRotation.y,
+      this.roadPitchRotation.z, this.roadPitchRotation.w,
+    );
     this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
 
     const bodyVelocity = this.body.linvel();
@@ -584,6 +614,8 @@ export class VehicleController {
     const horizontalLength = Math.hypot(heading.x, heading.z) || 1;
     const yaw = Math.atan2(heading.x, heading.z);
     const pitch = Math.atan2(heading.y, horizontalLength);
+    this.targetRoadPitch = pitch;
+    this.appliedRoadPitch = pitch;
     const halfYaw = yaw * 0.5;
     const halfPitch = -pitch * 0.5;
     const sinYaw = Math.sin(halfYaw);
