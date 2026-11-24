@@ -164,7 +164,6 @@ export class NYCWaterfrontSystem {
   update(
     deltaSeconds: number,
     renderer: THREE.WebGLRenderer,
-    camera: THREE.PerspectiveCamera,
     playerPosition: THREE.Vector3,
     sunDirection: THREE.Vector3,
     nightBlend: number,

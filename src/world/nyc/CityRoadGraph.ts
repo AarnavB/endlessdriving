@@ -1,3 +1,5 @@
+import { isHudsonWater } from "./NYCWaterfrontLayout";
+
 export type CityRoadAxis = "x" | "z";
 export type CityRoadCategory = "avenue" | "street" | "alley" | "bridge" | "expressway" | "ramp" | "underpass";
 export type CityDirectionality = "both" | "forward" | "reverse";
@@ -346,6 +348,18 @@ export class CityRoadGraph {
     const custom = this.customAdjacency.get(fromId)?.find((edge) => edge.toNodeId === toId);
     if (custom) return { ...custom };
     const segment = this.getSegmentBetween(fromId, toId);
+    if (segment.roadType === "surface") {
+      // Crossings require an explicit bridge/grade-separated graph edge.
+      const samples = Math.max(1, Math.ceil(segment.lengthM / 4));
+      for (let sample = 0; sample <= samples; sample++) {
+        const t = sample / samples;
+        const x = segment.start.x + (segment.end.x - segment.start.x) * t;
+        const z = segment.start.z + (segment.end.z - segment.start.z) * t;
+        if (isHudsonWater(x, z, 1.5)) {
+          throw new Error("A surface road cannot traverse the Hudson River water polygon.");
+        }
+      }
+    }
     const direction: 1 | -1 = fromId === segment.fromNodeId ? 1 : -1;
     const rule = segment.profile.directionality;
     if ((rule === "forward" && direction < 0) || (rule === "reverse" && direction > 0)) {

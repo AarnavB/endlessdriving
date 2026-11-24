@@ -15,6 +15,11 @@ import {
   isCityParkBlock,
 } from './CityUrbanModel';
 import type { CityBounds2D } from './CityUrbanModel';
+import {
+  HUDSON_RIVER_MIN_Z, HUDSON_RIVER_MAX_Z,
+  getHudsonEastBankX, getHudsonWestBankX, getHudsonRiverDepthM,
+  isHudsonWater, footprintTouchesHudson,
+} from './NYCWaterfrontLayout';
 
 interface CityChunk {
   key: string;
@@ -394,6 +399,40 @@ export class NYCCityChunkManager {
     this.treeGeometry.dispose();
   }
 
+  private getLandIntervals(
+    axis: 'x' | 'z',
+    fixed: number,
+    start: number,
+    end: number,
+  ): Array<[number, number]> {
+    if (end <= start) return [];
+    if (axis === 'x') {
+      if (fixed < HUDSON_RIVER_MIN_Z || fixed > HUDSON_RIVER_MAX_Z) return [[start, end]];
+      const westEdge = getHudsonWestBankX(fixed) - 2.5;
+      const eastEdge = getHudsonEastBankX(fixed) + 2.5;
+      const intervals: Array<[number, number]> = [];
+      if (start < westEdge) intervals.push([start, Math.min(end, westEdge)]);
+      if (end > eastEdge) intervals.push([Math.max(start, eastEdge), end]);
+      return intervals.filter(([a, b]) => b - a > 1);
+    }
+
+    const step = 4;
+    const intervals: Array<[number, number]> = [];
+    let runStart: number | null = null;
+    for (let station = start; station <= end + 1e-6; station += step) {
+      const sample = Math.min(station, end);
+      const land = !isHudsonWater(fixed, sample, 2.5);
+      if (land && runStart === null) runStart = sample;
+      if (!land && runStart !== null) {
+        if (sample - runStart > 1) intervals.push([runStart, sample - 2.5]);
+        runStart = null;
+      }
+      if (sample === end) break;
+    }
+    if (runStart !== null && end - runStart > 1) intervals.push([runStart, end]);
+    return intervals.filter(([a, b]) => b - a > 1);
+  }
+
   /**
    * Spatially coherent, low-amplitude urban topography. The smooth fade keeps
    * the graph-authored street grid level while block interiors follow broad
@@ -401,6 +440,9 @@ export class NYCCityChunkManager {
    * survey-grade New York elevation data.
    */
   private sampleTerrainHeight(worldX: number, worldZ: number): number {
+    if (isHudsonWater(worldX, worldZ)) {
+      return -getHudsonRiverDepthM(worldX, worldZ) - 1.25;
+    }
     const gridX = Math.round(worldX / CITY_BLOCK_SPACING_M);
     const gridZ = Math.round(worldZ / CITY_BLOCK_SPACING_M);
     const xRoadHalfWidth = this.graph.getRoadProfile('z', gridX).widthM * 0.5;
@@ -551,32 +593,36 @@ export class NYCCityChunkManager {
       const profile = this.graph.getRoadProfile('z', line);
       const half = profile.widthM * 0.5;
       if (x + half < minX - 1 || x - half > maxX + 1) continue;
-      pushRect(roadPositions, roadIndices, centerX, centerZ, x - half, x + half, minZ - 1, maxZ + 1, 0.012);
-      roadLines.add('z:' + line);
-      for (let block = firstZ; block <= lastZ; block++) {
-        const blockStart = block * CITY_BLOCK_SPACING_M;
-        const blockEnd = blockStart + CITY_BLOCK_SPACING_M;
-        const crossHalf = this.graph.getRoadProfile('x', block).widthM * 0.5;
-        const segmentStart = Math.max(minZ, blockStart + crossHalf + 1);
-        const segmentEnd = Math.min(maxZ, blockEnd - crossHalf - 1);
-        if (segmentEnd <= segmentStart) continue;
-        for (const side of [-1, 1]) {
-          const near = half + 0.32;
-          const far = half + SIDEWALK_WIDTH_M;
-          pushRect(sidewalkPositions, sidewalkIndices, centerX, centerZ,
-            Math.min(x + side * near, x + side * far), Math.max(x + side * near, x + side * far),
-            segmentStart, segmentEnd, SIDEWALK_LIFT_M);
-          curbs.push({
-            x: x + side * (half + CURB_WIDTH_M * 0.5),
-            z: (segmentStart + segmentEnd) * 0.5,
-            length: segmentEnd - segmentStart,
-            alongX: false,
-          });
+      const landIntervals = this.getLandIntervals('z', x, minZ - 1, maxZ + 1);
+      if (landIntervals.length > 0) roadLines.add('z:' + line);
+      for (const [landStart, landEnd] of landIntervals) {
+        pushRect(roadPositions, roadIndices, centerX, centerZ,
+          x - half, x + half, landStart, landEnd, 0.012);
+        for (let block = firstZ; block <= lastZ; block++) {
+          const blockStart = block * CITY_BLOCK_SPACING_M;
+          const blockEnd = blockStart + CITY_BLOCK_SPACING_M;
+          const crossHalf = this.graph.getRoadProfile('x', block).widthM * 0.5;
+          const segmentStart = Math.max(landStart, blockStart + crossHalf + 1);
+          const segmentEnd = Math.min(landEnd, blockEnd - crossHalf - 1);
+          if (segmentEnd <= segmentStart) continue;
+          for (const side of [-1, 1]) {
+            const near = half + 0.32;
+            const far = half + SIDEWALK_WIDTH_M;
+            pushRect(sidewalkPositions, sidewalkIndices, centerX, centerZ,
+              Math.min(x + side * near, x + side * far), Math.max(x + side * near, x + side * far),
+              segmentStart, segmentEnd, SIDEWALK_LIFT_M);
+            curbs.push({
+              x: x + side * (half + CURB_WIDTH_M * 0.5),
+              z: (segmentStart + segmentEnd) * 0.5,
+              length: segmentEnd - segmentStart,
+              alongX: false,
+            });
+          }
         }
+        this.addLineMarkings('z', x, landStart, landEnd, half, profile.lanesPerDirection,
+          profile.directionality === 'both', centerX, centerZ,
+          whitePositions, whiteIndices, yellowPositions, yellowIndices);
       }
-      this.addLineMarkings('z', x, minZ, maxZ, half, profile.lanesPerDirection,
-        profile.directionality === 'both', centerX, centerZ,
-        whitePositions, whiteIndices, yellowPositions, yellowIndices);
     }
 
     for (let line = firstZ; line <= lastZ; line++) {
@@ -584,33 +630,37 @@ export class NYCCityChunkManager {
       const profile = this.graph.getRoadProfile('x', line);
       const half = profile.widthM * 0.5;
       if (z + half < minZ - 1 || z - half > maxZ + 1) continue;
-      pushRect(roadPositions, roadIndices, centerX, centerZ, minX - 1, maxX + 1, z - half, z + half, 0.014);
-      roadLines.add('x:' + line);
-      for (let block = firstX; block <= lastX; block++) {
-        const blockStart = block * CITY_BLOCK_SPACING_M;
-        const blockEnd = blockStart + CITY_BLOCK_SPACING_M;
-        const crossHalf = this.graph.getRoadProfile('z', block).widthM * 0.5;
-        const segmentStart = Math.max(minX, blockStart + crossHalf + 1);
-        const segmentEnd = Math.min(maxX, blockEnd - crossHalf - 1);
-        if (segmentEnd <= segmentStart) continue;
-        for (const side of [-1, 1]) {
-          const near = half + 0.32;
-          const far = half + SIDEWALK_WIDTH_M;
-          pushRect(sidewalkPositions, sidewalkIndices, centerX, centerZ,
-            segmentStart, segmentEnd,
-            Math.min(z + side * near, z + side * far), Math.max(z + side * near, z + side * far),
-            SIDEWALK_LIFT_M);
-          curbs.push({
-            x: (segmentStart + segmentEnd) * 0.5,
-            z: z + side * (half + CURB_WIDTH_M * 0.5),
-            length: segmentEnd - segmentStart,
-            alongX: true,
-          });
+      const landIntervals = this.getLandIntervals('x', z, minX - 1, maxX + 1);
+      if (landIntervals.length > 0) roadLines.add('x:' + line);
+      for (const [landStart, landEnd] of landIntervals) {
+        pushRect(roadPositions, roadIndices, centerX, centerZ, landStart, landEnd,
+          z - half, z + half, 0.014);
+        for (let block = firstX; block <= lastX; block++) {
+          const blockStart = block * CITY_BLOCK_SPACING_M;
+          const blockEnd = blockStart + CITY_BLOCK_SPACING_M;
+          const crossHalf = this.graph.getRoadProfile('z', block).widthM * 0.5;
+          const segmentStart = Math.max(landStart, blockStart + crossHalf + 1);
+          const segmentEnd = Math.min(landEnd, blockEnd - crossHalf - 1);
+          if (segmentEnd <= segmentStart) continue;
+          for (const side of [-1, 1]) {
+            const near = half + 0.32;
+            const far = half + SIDEWALK_WIDTH_M;
+            pushRect(sidewalkPositions, sidewalkIndices, centerX, centerZ,
+              segmentStart, segmentEnd,
+              Math.min(z + side * near, z + side * far), Math.max(z + side * near, z + side * far),
+              SIDEWALK_LIFT_M);
+            curbs.push({
+              x: (segmentStart + segmentEnd) * 0.5,
+              z: z + side * (half + CURB_WIDTH_M * 0.5),
+              length: segmentEnd - segmentStart,
+              alongX: true,
+            });
+          }
         }
+        this.addLineMarkings('x', z, landStart, landEnd, half, profile.lanesPerDirection,
+          profile.directionality === 'both', centerX, centerZ,
+          whitePositions, whiteIndices, yellowPositions, yellowIndices);
       }
-      this.addLineMarkings('x', z, minX, maxX, half, profile.lanesPerDirection,
-        profile.directionality === 'both', centerX, centerZ,
-        whitePositions, whiteIndices, yellowPositions, yellowIndices);
     }
 
     this.addCrosswalks(firstX, lastX, firstZ, lastZ, centerX, centerZ, crosswalkPositions, crosswalkIndices);
@@ -1276,6 +1326,7 @@ export class NYCCityChunkManager {
       if (x < centerX - CITY_CHUNK_SIZE_M * 0.5 - 30 || x > centerX + CITY_CHUNK_SIZE_M * 0.5 + 30) continue;
       for (let gz = firstZ; gz <= lastZ; gz++) {
         const z = gz * CITY_BLOCK_SPACING_M;
+        if (isHudsonWater(x, z)) continue;
         const horizontalHalf = this.graph.getRoadProfile('x', gz).widthM * 0.5;
         if (z < centerZ - CITY_CHUNK_SIZE_M * 0.5 - 30 || z > centerZ + CITY_CHUNK_SIZE_M * 0.5 + 30) continue;
         for (const side of [-1, 1]) {
@@ -1327,6 +1378,8 @@ export class NYCCityChunkManager {
         if (centreX < minX || centreX >= maxX || centreZ < minZ || centreZ >= maxZ) continue;
 
         const district = getCityDistrictProfile(centreX, centreZ);
+        if (isHudsonWater(centreX, centreZ)
+          || centreX < getHudsonEastBankX(centreZ) + 300) continue;
         if (isCityParkBlock(this.graph.seed, gx, gz, district)) continue;
 
         // Reserve the road, curb and sidewalk envelope on all four block edges.
@@ -1362,6 +1415,9 @@ export class NYCCityChunkManager {
             minZ: buildingZ - depth * 0.5,
             maxZ: buildingZ + depth * 0.5,
           };
+          if (footprintTouchesHudson(
+            footprint.minX, footprint.maxX, footprint.minZ, footprint.maxZ,
+          )) continue;
           const intersectsElevatedRightOfWay = rightOfWaySegments.some((road) =>
             road.maxY > 0.25 && road.minY < buildingHeight + 0.5
             && road.maxX >= footprint.minX && road.minX <= footprint.maxX
@@ -1405,6 +1461,7 @@ export class NYCCityChunkManager {
       const bounds: CityBounds2D = {
         minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius,
       };
+      if (footprintTouchesHudson(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ)) return null;
       if (!isAabbClearOfRoadNetwork(bounds, this.graph, 0.15)) return null;
       if (placementIndex.query(bounds).length > 0) return null;
       placementIndex.insert(id, bounds, kind);

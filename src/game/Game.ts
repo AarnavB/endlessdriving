@@ -7,6 +7,7 @@ import { NYCCityChunkManager } from '../world/nyc/NYCCityChunkManager';
 import { CityRoadGraph } from '../world/nyc/CityRoadGraph';
 import { GooglePhotorealisticTiles } from '../world/nyc/GooglePhotorealisticTiles';
 import { NYCEnvironmentLighting } from '../world/nyc/NYCEnvironmentLighting';
+import { NYCWaterfrontSystem } from '../world/nyc/NYCWaterfrontSystem';
 import { VehicleController } from '../vehicles/VehicleController';
 import { getVehicleDefinition, loadSelectedVehicleId, saveSelectedVehicleId } from '../vehicles/VehicleDefinitions';
 import { GaragePreview } from '../vehicles/GaragePreview';
@@ -27,6 +28,7 @@ export class Game {
   private readonly debugOverlay: PhysicsDebugOverlay;
   private readonly trafficPlayerPosition = new THREE.Vector3();
   private readonly sunFocusPosition = new THREE.Vector3();
+  private readonly waterSunDirection = new THREE.Vector3();
   private readonly sunTarget = new THREE.Object3D();
   private readonly clock = new THREE.Clock();
   private readonly fixedTimeStep = 1 / 60;
@@ -36,6 +38,7 @@ export class Game {
   private readonly roadGraph = new CityRoadGraph(20261124);
   private readonly worldOffset = new THREE.Vector3();
   private worldScene!: NYCCityChunkManager;
+  private waterfront!: NYCWaterfrontSystem;
   private googleTiles: GooglePhotorealisticTiles | null = null;
   private physics!: RAPIER.World;
   private vehicle!: VehicleController;
@@ -51,6 +54,7 @@ export class Game {
   private frameCount = 0;
   private fps = 0;
   private dayPhase = 0.38;
+  private nightBlend = 0;
   private readonly hemi = new THREE.HemisphereLight(0xdbe9f2, 0x373d43, 0.85);
   private readonly sun = new THREE.DirectionalLight(0xffe3bd, 3.0);
   private readonly environmentLighting: NYCEnvironmentLighting;
@@ -165,6 +169,7 @@ export class Game {
     this.debugOverlay.dispose();
     this.traffic.dispose();
     this.worldScene.dispose();
+    this.waterfront.dispose();
     this.googleTiles?.dispose();
     this.environmentLighting.dispose(this.scene);
     this.renderer.dispose();
@@ -204,6 +209,7 @@ export class Game {
     this.vehicle.rebase(delta);
     this.traffic.rebase(delta);
     this.worldScene.rebase(delta);
+    this.waterfront.rebase(delta);
     this.worldOffset.add(delta);
     this.cameraRig.snap(this.vehicle.getPosition(), this.vehicle.getForward());
     return true;
@@ -251,6 +257,7 @@ export class Game {
     const cityWorld = new NYCCityChunkManager(this.scene, this.physics, this.roadGraph);
     await cityWorld.initialize(spawnPosition);
     this.worldScene = cityWorld;
+    this.waterfront = new NYCWaterfrontSystem(this.scene, this.physics, settings.graphics);
 
     this.vehicle = new VehicleController(this.physics, this.scene, getVehicleDefinition(loadSelectedVehicleId()));
     this.vehicle.setManualTransmission(this.manualTransmission);
@@ -288,6 +295,11 @@ export class Game {
         if (!this.paused) this.step(frameDt);
         else this.input.drainEdges();
         this.garagePreview.update(frameDt, this.ui.isGarageVisible());
+        if (this.waterfront && this.vehicle) {
+          const position = this.vehicle.getPosition(this.trafficPlayerPosition);
+          this.waterSunDirection.copy(this.sun.position).sub(this.sunTarget.position).normalize();
+          this.waterfront.update(frameDt, this.renderer, position, this.waterSunDirection, this.nightBlend);
+        }
         this.googleTiles?.update();
         this.renderer.render(this.scene, this.camera);
         this.updateFps();
@@ -370,7 +382,9 @@ export class Game {
 
     this.dayPhase = (this.dayPhase + frameDt * 0.00048) % 1;
     const night = THREE.MathUtils.clamp((Math.cos(this.dayPhase * Math.PI * 2) + 0.25) * 0.72, 0, 1);
+    this.nightBlend = night;
     this.worldScene.setNightBlend(night);
+    this.waterfront.setNightBlend(night);
     this.sun.intensity = THREE.MathUtils.lerp(0.04, 3.0, 1 - night);
     this.hemi.intensity = THREE.MathUtils.lerp(0.12, 0.85, 1 - night);
     // Keep the directional-light shadow frustum centred on the active vehicle.
