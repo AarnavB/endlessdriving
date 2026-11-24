@@ -172,6 +172,34 @@ try {
     && graph.getSegment(edge.segmentId).roadType === 'entrance-ramp'),
   'bidirectional ramp connectivity supports the reverse route');
 
+  // A remote chunk deterministically materialises the same elevated corridor
+  // and a second ramp pair; multi-level generation is not limited to the
+  // representative interchange around the origin.
+  const remoteSegments = graph.getSpecialSegmentsInBounds(1024, 1792, 290, 350);
+  assert(remoteSegments.some((segment) => segment.roadType === 'elevated-highway'),
+    'distant streamed chunks generate continuous elevated expressway segments');
+  assert(remoteSegments.some((segment) => segment.id === 'nyc:ramp:8:lower')
+    && remoteSegments.some((segment) => segment.id === 'nyc:ramp:8:upper'),
+    'distant chunks generate a deterministic, connected procedural ramp pair');
+  const remoteGroundNode = graph.getIntersectionId(8, 2);
+  const remoteDeckNode = graph.getIntersectionId(10, 2, 1);
+  const remoteRampRoute = graph.findRoute(remoteGroundNode, remoteDeckNode);
+  assert(remoteRampRoute.some((edge) => graph.getSegment(edge.segmentId).roadType === 'entrance-ramp')
+    && remoteRampRoute.some((edge) => graph.getSegment(edge.segmentId).roadType === 'exit-ramp'),
+    'a second interchange connects ground traffic onto the remote elevated corridor');
+  const remoteRamp = graph.getSegment('nyc:ramp:8:upper');
+  let remoteMaximumGrade = 0;
+  let remotePrevious = graph.getCenterlinePose(remoteRamp.id, 0).position;
+  for (let sample = 1; sample <= 32; sample++) {
+    const currentPosition = graph.getCenterlinePose(remoteRamp.id, remoteRamp.lengthM * sample / 32).position;
+    const run = Math.hypot(currentPosition.x - remotePrevious.x, currentPosition.z - remotePrevious.z);
+    remoteMaximumGrade = Math.max(remoteMaximumGrade,
+      Math.abs(currentPosition.y - remotePrevious.y) / Math.max(1e-6, run));
+    remotePrevious = currentPosition;
+  }
+  assert(remoteMaximumGrade <= remoteRamp.maxGradient + 0.002,
+    'procedurally generated remote ramps respect the configured grade limit');
+
   const underpassSegments = graph.getUnderpassSegments();
   assert(underpassSegments.length >= 1, 'the interchange includes graph-backed underpass segments');
   assert(underpassSegments.every((segment) => segment.roadType === 'underpass' && segment.level === 0),
@@ -299,6 +327,9 @@ try {
     && /elevatedUndersideGeometry\) this\.addTrimeshCollider/.test(managerSource)
     && /addUnderpassColliders\(body/.test(managerSource),
     'elevated decks, soffits and underpass structures receive matching Rapier colliders');
+  assert(/for \(const barrier of barrierSpecs\)/.test(managerSource)
+    && /setRotation\(\{ x: rotation\.x, y: rotation\.y, z: rotation\.z, w: rotation\.w \}\)/.test(managerSource),
+    'bridge and ramp guardrails have matching rotated collision shapes');
   assert(/underpass-west-retaining-wall-north/.test(managerSource)
     && /underpass-west-retaining-wall-south/.test(managerSource),
     'underpass retaining walls leave the transverse at-grade crossing clear');
