@@ -86,6 +86,102 @@ try {
   assert(Math.abs(Math.abs(lanePoses[0].position.x - lanePoses[1].position.x)
     - avenueProfile.laneWidthM) < 1e-9, 'lane spacing matches the declared lane width');
 
+  // Grade-separated road crossings must have distinct graph identities and
+  // no implicit edge between the coincident horizontal coordinates.
+  const interchange = graph.getInterchangeDescriptor();
+  const groundCrossingId = graph.getIntersectionId(0, 2);
+  const deckCrossing = graph.getIntersection(interchange.deckCrossingNodeId);
+  const groundCrossing = graph.getIntersection(groundCrossingId);
+  assert.equal(groundCrossing.level, 0, 'surface crossing remains on the ground level');
+  assert.equal(deckCrossing.level, 1, 'expressway crossing uses its own graph level');
+  assert.equal(deckCrossing.position.x, groundCrossing.position.x,
+    'the elevated and ground nodes occupy the same X coordinate');
+  assert.equal(deckCrossing.position.z, groundCrossing.position.z,
+    'the elevated and ground nodes occupy the same Z coordinate');
+  assert(deckCrossing.position.y > groundCrossing.position.y + 6,
+    'the highway deck has genuine vertical clearance above the street');
+  assert.notEqual(deckCrossing.id, groundCrossing.id,
+    'coincident roads at different levels have distinct node identities');
+  assert(graph.getOutgoingEdges(groundCrossingId)
+    .every((edge) => edge.toNodeId !== deckCrossing.id),
+  'grade-separated roads are not connected by horizontal proximity');
+  assert.throws(() => graph.getEdgeFromTo(groundCrossingId, deckCrossing.id),
+    /Grid segments are ground-level only/,
+    'a level change is rejected unless represented by an explicit ramp edge');
+
+  const rampMidId = graph.getIntersectionId(-2, 2, 1);
+  const rampStart = graph.getEdgeFromTo(interchange.groundEntryNodeId, rampMidId);
+  const rampFinish = graph.getEdgeFromTo(rampMidId, graph.getIntersectionId(-1, 2, 1));
+  const firstRampSegment = graph.getSegment(rampStart.segmentId);
+  const secondRampSegment = graph.getSegment(rampFinish.segmentId);
+  assert.equal(firstRampSegment.roadType, 'entrance-ramp', 'the ground-to-deck connector is typed as an entrance ramp');
+  assert.equal(firstRampSegment.level, 1, 'ramp carries its explicit road layer');
+  const firstEndPose = graph.getCenterlinePose(firstRampSegment.id, firstRampSegment.lengthM);
+  const secondStartPose = graph.getCenterlinePose(secondRampSegment.id, 0);
+  assert(Math.hypot(
+    firstEndPose.position.x - secondStartPose.position.x,
+    firstEndPose.position.y - secondStartPose.position.y,
+    firstEndPose.position.z - secondStartPose.position.z,
+  ) < 1e-7, 'consecutive entrance-ramp segments meet without an elevation or position jump');
+  const tangentDot = firstEndPose.tangent.x * secondStartPose.tangent.x
+    + firstEndPose.tangent.y * secondStartPose.tangent.y
+    + firstEndPose.tangent.z * secondStartPose.tangent.z;
+  assert(tangentDot > 0.999, 'ramp segment boundaries preserve a continuous forward tangent');
+
+  for (const segmentId of [...interchange.entryRampSegmentIds, ...interchange.exitRampSegmentIds]) {
+    const segment = graph.getSegment(segmentId);
+    let maximumObservedGradient = 0;
+    let previous = graph.getCenterlinePose(segmentId, 0).position;
+    for (let sample = 1; sample <= 48; sample++) {
+      const distance = segment.lengthM * sample / 48;
+      const currentPose = graph.getCenterlinePose(segmentId, distance).position;
+      const horizontalRun = Math.hypot(
+        currentPose.x - previous.x,
+        currentPose.z - previous.z,
+      );
+      const grade = Math.abs(currentPose.y - previous.y) / Math.max(1e-6, horizontalRun);
+      maximumObservedGradient = Math.max(maximumObservedGradient, grade);
+      previous = currentPose;
+    }
+    assert(maximumObservedGradient <= segment.maxGradient + 0.002,
+      'ramp ' + segmentId + ' respects its declared maximum gradient');
+  }
+
+  const routeOntoHighway = graph.findRoute(
+    interchange.groundEntryNodeId, interchange.deckCrossingNodeId,
+  );
+  assert(routeOntoHighway.some((edge) => graph.getSegment(edge.segmentId).roadType === 'entrance-ramp'),
+    'the road graph routes from surface streets onto the elevated expressway');
+  const routeOffHighway = graph.findRoute(
+    interchange.deckCrossingNodeId, interchange.groundExitNodeId,
+  );
+  assert(routeOffHighway.some((edge) => graph.getSegment(edge.segmentId).roadType === 'exit-ramp'),
+    'the road graph routes from the expressway down to surface streets');
+  const routeBackDown = graph.findRoute(
+    interchange.deckCrossingNodeId, interchange.groundEntryNodeId,
+  );
+  assert(routeBackDown.some((edge) => edge.direction < 0
+    && graph.getSegment(edge.segmentId).roadType === 'entrance-ramp'),
+  'bidirectional ramp connectivity supports the reverse route');
+
+  const underpassSegments = graph.getUnderpassSegments();
+  assert(underpassSegments.length >= 1, 'the interchange includes graph-backed underpass segments');
+  assert(underpassSegments.every((segment) => segment.roadType === 'underpass' && segment.level === 0),
+    'underpass streets remain on their own ground-level road surface');
+  assert.equal(deckCrossing.signalControlled, false,
+    'the elevated deck crossing does not create an independent traffic signal');
+  const deckIncoming = graph.getEdgeFromTo(
+    graph.getIntersectionId(-1, 2, 1), interchange.deckCrossingNodeId,
+  );
+  const deckOutgoing = graph.getOutgoingEdges(interchange.deckCrossingNodeId)
+    .find((edge) => edge.toNodeId !== deckIncoming.fromNodeId);
+  assert(deckOutgoing, 'the elevated deck has a valid onward connection');
+  const gradeSignals = new city.CityTrafficController(graph);
+  assert.equal(gradeSignals.canEnterMovement(interchange.deckCrossingNodeId, deckIncoming, deckOutgoing),
+    true, 'grade-separated highway movement bypasses unrelated ground-level signal phases');
+  assert.equal(gradeSignals.getSignalState(interchange.deckCrossingNodeId, 'x'),
+    'green', 'an uncontrolled elevated node does not cycle a ground-level signal');
+  
   const forwardAlleyStart = graph.getIntersectionId(0, 5);
   const forwardAlleyEnd = graph.getIntersectionId(1, 5);
   assert.throws(() => graph.getEdgeFromTo(forwardAlleyStart, forwardAlleyEnd),
@@ -171,6 +267,21 @@ try {
     'rendered signal heads and protected arrows are connected to live traffic phases');
   assert(/setNextKinematicTranslation/.test(trafficSource) && /setNextKinematicRotation/.test(trafficSource),
     'AI transforms are submitted through Rapier kinematic bodies');
+  assert(/getPoseRotation/.test(trafficSource)
+    && /makeBasis\(/.test(trafficSource)
+    && /pose\.tangent/.test(trafficSource),
+    'AI vehicle orientation follows the full 3D road tangent frame rather than yaw alone');
+  assert(/getSpecialSegmentsInBounds/.test(managerSource)
+    && /elevated-highways-and-ramps/.test(managerSource)
+    && /bridge-deck-undersides/.test(managerSource),
+    'chunk rendering builds graph-derived elevated road decks and visible soffits');
+  assert(/elevatedRoadGeometry\) this\.addTrimeshCollider/.test(managerSource)
+    && /elevatedUndersideGeometry\) this\.addTrimeshCollider/.test(managerSource)
+    && /addUnderpassColliders\(body/.test(managerSource),
+    'elevated decks, soffits and underpass structures receive matching Rapier colliders');
+  assert(/underpass-west-retaining-wall-north/.test(managerSource)
+    && /underpass-west-retaining-wall-south/.test(managerSource),
+    'underpass retaining walls leave the transverse at-grade crossing clear');
   assert(/removeRigidBody\(chunk\.body\)/.test(managerSource) && /geometry\.dispose\(\)/.test(managerSource),
     'chunk disposal releases colliders and chunk geometry');
   assert(/this\.originOffset\.add\(delta\)/.test(managerSource),
@@ -290,7 +401,7 @@ try {
     runtimeChunksLoaded: initialChunks.activeChunks,
     trafficPool: 10,
     headlessPhysicsFrames: 120,
-    assertions: 47,
+    assertions: 75,
     result: 'PASS',
   }, null, 2));
 } finally {
