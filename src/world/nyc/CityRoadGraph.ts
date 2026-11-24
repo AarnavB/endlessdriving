@@ -166,6 +166,17 @@ export class CityRoadGraph {
   getIntersection(id: string): CityIntersection {
     const existing = this.intersections.get(id);
     if (existing) return existing;
+    if (id.startsWith("level:")) {
+      const parts = id.split(":");
+      const level = Number(parts[1]);
+      const gridX = Number(parts[2]);
+      const gridZ = Number(parts[3]);
+      if (parts.length === 4 && level === 1 && Number.isInteger(gridX) && gridZ === 2) {
+        this.ensureHighwayNode(gridX);
+        return this.intersections.get(id)!;
+      }
+      throw new Error("Unknown elevated road node; register it with addRoadNode first: " + id);
+    }
     const grid = parseNodeId(id);
     const intersection: CityIntersection = {
       id,
@@ -351,6 +362,15 @@ export class CityRoadGraph {
   getOutgoingEdges(intersectionId: string): CityRoadEdge[] {
     const node = this.getIntersection(intersectionId);
     const result: CityRoadEdge[] = [];
+    if (node.level === 0 && node.gridZ === 2
+      && Math.abs(node.gridX) % 8 === 0
+      && (node.gridX < -3 || node.gridX > 5)) {
+      this.ensureProceduralRamp(node.gridX);
+    }
+    if (node.level === 1 && node.kind === "elevated" && node.gridZ === 2) {
+      this.ensureHighwaySegment(node.gridX - 1);
+      this.ensureHighwaySegment(node.gridX);
+    }
     if (node.level === 0) {
       const candidates = [
         [node.gridX + 1, node.gridZ],
@@ -421,6 +441,9 @@ export class CityRoadGraph {
     preferredZ = 1,
     preferredY = 0,
   ): CityLanePose {
+    // Build nearby levelled geometry on demand as well as during chunk load,
+    // so recovery and road-heading queries work on streamed highway sections.
+    this.getSpecialSegmentsInBounds(x - 28, x + 28, z - 28, z + 28);
     const verticalLine = Math.round(x / CITY_BLOCK_SPACING_M);
     const horizontalLine = Math.round(z / CITY_BLOCK_SPACING_M);
     const verticalProfile = this.getRoadProfile("z", verticalLine);
@@ -541,6 +564,16 @@ export class CityRoadGraph {
   }
 
   getSpecialSegmentsInBounds(minX: number, maxX: number, minZ: number, maxZ: number): CityRoadSegment[] {
+    if (minZ <= 350 && maxZ >= 290) {
+      const firstGridX = Math.floor(minX / CITY_BLOCK_SPACING_M) - 1;
+      const lastGridX = Math.ceil(maxX / CITY_BLOCK_SPACING_M) + 1;
+      for (let gridX = firstGridX; gridX <= lastGridX; gridX++) {
+        this.ensureHighwaySegment(gridX);
+        if (Math.abs(gridX) % 8 === 0 && (gridX < -3 || gridX > 5)) {
+          this.ensureProceduralRamp(gridX);
+        }
+      }
+    }
     const result: CityRoadSegment[] = [];
     for (const segment of this.customSegments.values()) {
       const points = [segment.start, segment.end, ...(segment.controlPoints ?? [])];
@@ -558,6 +591,93 @@ export class CityRoadGraph {
   getUnderpassSegments(): CityRoadSegment[] {
     const ids = this.interchange.underpassSegmentIds;
     return ids.map((id) => this.getSegment(id));
+  }
+
+  private ensureHighwayNode(gridX: number): string {
+    const gridZ = 2;
+    const id = this.getIntersectionId(gridX, gridZ, 1);
+    if (!this.intersections.has(id)) {
+      this.registerNode(
+        id, gridX, gridZ,
+        { x: gridX * CITY_BLOCK_SPACING_M, y: CITY_HIGHWAY_ELEVATION_M, z: gridZ * CITY_BLOCK_SPACING_M },
+        1, "elevated", "grade-separated", false,
+      );
+    }
+    return id;
+  }
+
+  private ensureHighwaySegment(gridX: number): void {
+    const fromNodeId = this.ensureHighwayNode(gridX);
+    const toNodeId = this.ensureHighwayNode(gridX + 1);
+    const existing = (this.customAdjacency.get(fromNodeId) ?? [])
+      .some((edge) => edge.toNodeId === toNodeId);
+    if (existing) return;
+
+    const startX = gridX * CITY_BLOCK_SPACING_M;
+    const id = "nyc:expressway:east-west:" + String(gridX);
+    const profile: CityRoadProfile = {
+      category: "expressway", axis: "x", lineIndex: 2, lanesPerDirection: 3,
+      laneWidthM: 3.65, widthM: 28.2, speedLimitKmh: 80, directionality: "both",
+    };
+    this.registerCustomSegment(
+      id, fromNodeId, toNodeId, "elevated-highway", profile,
+      [
+        { x: startX + CITY_BLOCK_SPACING_M / 3, y: CITY_HIGHWAY_ELEVATION_M, z: 320 },
+        { x: startX + CITY_BLOCK_SPACING_M * 2 / 3, y: CITY_HIGHWAY_ELEVATION_M, z: 320 },
+      ],
+      "Deterministic east-west elevated urban expressway",
+      0.045,
+    );
+  }
+
+  private ensureProceduralRamp(gridX: number): void {
+    if (Math.abs(gridX) % 8 !== 0 || (gridX >= -3 && gridX <= 5)) return;
+    const groundNodeId = this.getIntersectionId(gridX, 2);
+    this.getIntersection(groundNodeId);
+    const rampMidNodeId = this.getIntersectionId(gridX + 1, 3, 1);
+    const deckNodeId = this.ensureHighwayNode(gridX + 2);
+    if (!this.intersections.has(rampMidNodeId)) {
+      this.registerNode(
+        rampMidNodeId, gridX + 1, 3,
+        {
+          x: (gridX + 1) * CITY_BLOCK_SPACING_M,
+          y: CITY_HIGHWAY_ELEVATION_M * 0.5,
+          z: 336,
+        },
+        1, "ramp", "merge", false,
+      );
+    }
+    const rampProfile: CityRoadProfile = {
+      category: "ramp", axis: "x", lineIndex: 2, lanesPerDirection: 1,
+      laneWidthM: 3.55, widthM: 9.4, speedLimitKmh: 45, directionality: "both",
+    };
+    const startX = gridX * CITY_BLOCK_SPACING_M;
+    const firstId = "nyc:ramp:" + String(gridX) + ":lower";
+    const secondId = "nyc:ramp:" + String(gridX) + ":upper";
+    if (!this.customSegments.has(firstId)) {
+      this.registerCustomSegment(
+        firstId, groundNodeId, rampMidNodeId, "entrance-ramp", rampProfile,
+        [
+          { x: startX + CITY_BLOCK_SPACING_M / 3, y: 0, z: 320 },
+          { x: startX + CITY_BLOCK_SPACING_M * 2 / 3, y: CITY_HIGHWAY_ELEVATION_M * 0.5, z: 336 },
+        ],
+        "Procedural expressway entrance and exit ramp - lower transition",
+        0.045,
+      );
+    }
+    if (!this.customSegments.has(secondId)) {
+      this.registerCustomSegment(
+        secondId, rampMidNodeId, deckNodeId, "exit-ramp", rampProfile,
+        [
+          { x: startX + CITY_BLOCK_SPACING_M * 4 / 3, y: CITY_HIGHWAY_ELEVATION_M * 0.5, z: 336 },
+          { x: startX + CITY_BLOCK_SPACING_M * 5 / 3, y: CITY_HIGHWAY_ELEVATION_M, z: 320 },
+        ],
+        "Procedural expressway merge ramp - upper transition",
+        0.045,
+      );
+    }
+    this.ensureHighwaySegment(gridX + 1);
+    this.ensureHighwaySegment(gridX + 2);
   }
 
   private registerNode(
