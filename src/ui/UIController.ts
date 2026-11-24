@@ -313,6 +313,7 @@ export class UIController {
     this.text('#speed-unit', unit);
     this.text('#rpm-value', Math.round(data.rpm).toString().padStart(4, '0'));
     this.text('#gear-value', data.gearLabel);
+    this.root.querySelector<HTMLElement>('#handbrake-status')?.classList.toggle('hidden', !data.handbrakeActive);
     const gearIndicator = this.root.querySelector<HTMLElement>('#gear-value');
     gearIndicator?.classList.toggle('is-neutral', data.gearLabel === 'N');
     gearIndicator?.classList.toggle('is-reverse', data.gearLabel === 'R');
@@ -399,7 +400,8 @@ export class UIController {
   private render(): void {
     const savedControls = [
       ['W / ↑', 'Accelerate'], ['S / ↓', 'Brake; hold at a stop to reverse'], ['A D / ← →', 'Steer'],
-      ['SPACE', 'Handbrake'], ['E / Q', 'Shift up / down (manual; Q from 1 selects neutral)'],
+      ['SPACE', 'Handbrake'], ['E / Q', 'Shift up / down (manual)'],
+      ['N', 'Select neutral immediately'], ['LEFT / RIGHT SHIFT', 'Clutch pedal (hold to disengage)'],
       ['GEAR SELECTOR', 'Select neutral or Drive / a forward gear'], ['M', 'Toggle auto / manual'],
       ['C', 'Change camera'], ['R', 'Reset vehicle'], ['ESC', 'Pause game'], ['H', 'Toggle HUD'],
     ];
@@ -438,6 +440,7 @@ export class UIController {
               <button type="button" data-gear-option="6" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select sixth gear" aria-pressed="false">6</button>
               <button type="button" data-gear-option="7" data-forward-gear class="${this.settings.transmission === 'auto' ? 'hidden' : ''}" aria-label="Select seventh gear" aria-pressed="false">7</button>
             </div>
+            <div id="handbrake-status" class="handbrake-status hidden" role="status">HANDBRAKE ACTIVE</div>
             <div class="cluster-footnote"><span>THROTTLE <b id="throttle-value">0%</b></span><span>F3 DIAGNOSTICS</span></div>
           </div>
         </div>
