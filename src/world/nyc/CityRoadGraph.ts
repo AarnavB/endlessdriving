@@ -358,6 +358,21 @@ export class CityTrafficController {
     return this.getSignalState(intersectionId, incomingAxis) === "green";
   }
 
+  /** State for a protected left-turn arrow on a specific approach. */
+  getProtectedLeftTurnState(
+    intersectionId: string,
+    incomingAxis: CityRoadAxis,
+    direction: 1 | -1,
+  ): "green" | "red" {
+    const node = this.graph.getIntersection(intersectionId);
+    const phase = mod(this.elapsedSeconds + node.signalOffsetSeconds, SIGNAL_CYCLE_SECONDS);
+    const approachIndex = incomingAxis === "z"
+      ? direction > 0 ? 0 : 1
+      : direction > 0 ? 2 : 3;
+    const leftStart = 40 + approachIndex * 4;
+    return phase >= leftStart && phase < leftStart + 4 ? "green" : "red";
+  }
+
   /**
    * Movement-aware permission: straight and right movements use their
    * protected axis phase; left turns receive a short exclusive approach phase.
