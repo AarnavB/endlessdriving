@@ -227,19 +227,13 @@ try {
       }
       assert(stoppedDuringBrake, 'F40 did not reach standstill under controlled braking');
 
-      // Let residual speed settle and release the brake before deliberately
-      // requesting reverse from a stationary state.
-      for (let i = 0; i < 90; i++) {
-        const { debug } = sim.step(NEUTRAL_INPUT);
-        assert(debug.forwardSpeed >= -0.15, 'F40 reversed after all controls were released');
-      }
+      // Keep the service brake held at standstill. Releasing it in gear now
+      // correctly permits idle creep, so the intentional reverse gesture is
+      // a continuous brake hold through the existing 0.4 s engagement delay.
       assert(
-        Math.abs(sim.vehicle.getDebugTelemetry(NEUTRAL_INPUT, FIXED_DT, 1).forwardSpeed) <= 0.25,
-        'F40 was not stationary before intentional reverse request',
+        Math.abs(sim.vehicle.getDebugTelemetry(BRAKE_INPUT, FIXED_DT, 1).forwardSpeed) <= 0.25,
+        'F40 did not reach standstill before intentional reverse request',
       );
-
-      // At standstill, holding S for the engagement interval is the existing
-      // deliberate reverse command.
       for (let i = 0; i < 90; i++) {
         const { debug } = sim.step(BRAKE_INPUT);
         if (debug.appliedForwardForce < -1e-6) reverseApplied = true;
