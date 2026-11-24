@@ -387,7 +387,9 @@ try {
     'terrain normals are sampled consistently at chunk boundaries');
   const roadMesh = terrainChunk?.getObjectByName('asphalt-road-network');
   assert(roadMesh instanceof THREE.Mesh, 'streamed chunk exposes the road surface mesh');
-  const roadMaterial = roadMesh.material as THREE.MeshStandardMaterial;
+  const roadMaterial = Array.isArray(roadMesh.material) ? roadMesh.material[0] : roadMesh.material;
+  assert(roadMaterial instanceof THREE.MeshStandardMaterial,
+    'road surface uses a physically based standard material');
   assert(roadMaterial.map instanceof THREE.DataTexture
     && roadMaterial.normalMap instanceof THREE.DataTexture
     && roadMaterial.roughnessMap instanceof THREE.DataTexture,
