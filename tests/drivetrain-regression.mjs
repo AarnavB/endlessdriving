@@ -587,7 +587,7 @@ try {
     }
     for (let i = 1; i < samples.length; i++) {
       assert(samples[i - 1].leftAngleRad > samples[i].leftAngleRad,
-        `${definition.name}: steering did not progressively reduce from ${samples[i - 1].speedKmh} to ${samples[i].speedKmh} km/h`);
+        `${definition.name}: steering did not progressively reduce from ${samples[i - 1].speedKmh} to ${samples[i].speedKmh} km/h (left ${samples[i - 1].leftAngleRad} -> ${samples[i].leftAngleRad} rad; right ${samples[i - 1].rightAngleRad} -> ${samples[i].rightAngleRad} rad)`);
     }
     assert(samples[2].leftAngleRad >= 0.1,
       `${definition.name}: steering authority remained too low at 50 km/h (${samples[2].leftAngleRad} rad)`);
