@@ -19,6 +19,13 @@ export interface VehiclePhysicsProfile {
   lateralGrip: number;
   handbrakeGrip: number;
   steeringResponse: number;
+  /** Idle-speed torque available for natural clutch-in-gear creep (Nm). */
+  idleTorqueNm: number;
+  /** Clutch torque capacity at full engagement (Nm). */
+  clutchCapacityNm: number;
+  /** Closed-throttle engine braking torque at the crankshaft (Nm). */
+  engineBrakeTorqueNm: number;
+  /** Legacy prototype brake setting retained for data compatibility. */
   engineBrakeForce: number;
   wheelRadiusM: number;
   /** Final reduction calibrated so top gear reaches rated top speed near redline. */
@@ -132,6 +139,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       dragAreaM2: 0.76, rollingResistanceCoefficient: 0.014,
       brakeForce: 18400,
       lateralGrip: 5900, handbrakeGrip: 1480, steeringResponse: 0.94,
+      idleTorqueNm: 38, clutchCapacityNm: 780, engineBrakeTorqueNm: 58,
       engineBrakeForce: 720, wheelRadiusM: 0.34, finalDrive: 2.99, transferDrive: 1.33,
       gearRatios: [2.77, 1.71, 1.23, 0.96, 0.77], torqueCurve: f40TorqueCurve,
     },
@@ -170,6 +178,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       dragAreaM2: 0.68, rollingResistanceCoefficient: 0.012,
       brakeForce: 21800,
       lateralGrip: 6900, handbrakeGrip: 1650, steeringResponse: 1.08,
+      idleTorqueNm: 48, clutchCapacityNm: 1250, engineBrakeTorqueNm: 82,
       engineBrakeForce: 790, wheelRadiusM: 0.34, finalDrive: 4.88, transferDrive: 1,
       hybridAssist: 1.16,
       gearRatios: [3.10, 2.18, 1.63, 1.29, 1.03, 0.84, 0.69], torqueCurve: laFerrariTorqueCurve,
@@ -209,6 +218,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       dragAreaM2: 0.7, rollingResistanceCoefficient: 0.013,
       brakeForce: 19000,
       lateralGrip: 6400, handbrakeGrip: 1540, steeringResponse: 1.02,
+      idleTorqueNm: 36, clutchCapacityNm: 820, engineBrakeTorqueNm: 68,
       engineBrakeForce: 760, wheelRadiusM: 0.34, finalDrive: 4.72, transferDrive: 1,
       gearRatios: [3.09, 2.05, 1.52, 1.12, 0.88, 0.71], torqueCurve: gallardoTorqueCurve,
     },
@@ -247,6 +257,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       dragAreaM2: 0.75, rollingResistanceCoefficient: 0.014,
       brakeForce: 20500,
       lateralGrip: 6250, handbrakeGrip: 1500, steeringResponse: 0.9,
+      idleTorqueNm: 42, clutchCapacityNm: 930, engineBrakeTorqueNm: 86,
       engineBrakeForce: 850, wheelRadiusM: 0.35, finalDrive: 3.51, transferDrive: 1,
       gearRatios: [3.091, 2.105, 1.565, 1.241, 1.065, 0.939], torqueCurve: murcielagoTorqueCurve,
     },
@@ -285,6 +296,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       dragAreaM2: 0.72, rollingResistanceCoefficient: 0.013,
       brakeForce: 22000,
       lateralGrip: 6750, handbrakeGrip: 1580, steeringResponse: 1.14,
+      idleTorqueNm: 43, clutchCapacityNm: 980, engineBrakeTorqueNm: 88,
       engineBrakeForce: 890, wheelRadiusM: 0.35, finalDrive: 5.17, transferDrive: 1,
       gearRatios: [2.92, 1.97, 1.44, 1.10, 0.90, 0.74, 0.62], torqueCurve: aventadorTorqueCurve,
     },
@@ -323,6 +335,7 @@ export const VEHICLE_CATALOGUE: readonly VehicleDefinition[] = [
       dragAreaM2: 0.77, rollingResistanceCoefficient: 0.014,
       brakeForce: 23800,
       lateralGrip: 7900, handbrakeGrip: 1760, steeringResponse: 1.22,
+      idleTorqueNm: 40, clutchCapacityNm: 1180, engineBrakeTorqueNm: 76,
       engineBrakeForce: 820, wheelRadiusM: 0.34, finalDrive: 4.71, transferDrive: 1,
       gearRatios: [3.98, 2.61, 1.91, 1.48, 1.16, 0.91, 0.69], torqueCurve: sennaTorqueCurve,
     },
