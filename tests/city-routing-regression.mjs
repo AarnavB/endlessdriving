@@ -385,6 +385,17 @@ try {
     'terrain heightfield carries lightweight spatial surface colour variation');
   assert(terrainMesh.geometry.getAttribute('normal')?.count === terrainMesh.geometry.getAttribute('position')?.count,
     'terrain normals are sampled consistently at chunk boundaries');
+  const roadMesh = terrainChunk?.getObjectByName('asphalt-road-network');
+  assert(roadMesh instanceof THREE.Mesh, 'streamed chunk exposes the road surface mesh');
+  const roadMaterial = roadMesh.material as THREE.MeshStandardMaterial;
+  assert(roadMaterial.map instanceof THREE.DataTexture
+    && roadMaterial.normalMap instanceof THREE.DataTexture
+    && roadMaterial.roughnessMap instanceof THREE.DataTexture,
+    'asphalt uses shared procedural albedo, normal and roughness maps');
+  assert(roadMesh.geometry.getAttribute('uv')?.count === roadMesh.geometry.getAttribute('position')?.count,
+    'road mesh has world-aligned UVs for continuous texture tiling');
+  assert(roadMaterial.roughness > 0.9 && roadMaterial.metalness === 0,
+    'asphalt PBR response remains dielectric and highly rough');
   const terrainPositions = terrainMesh.geometry.getAttribute('position');
   let minimumTerrainY = Infinity;
   let maximumTerrainY = -Infinity;

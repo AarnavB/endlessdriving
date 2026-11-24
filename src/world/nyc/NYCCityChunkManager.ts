@@ -52,11 +52,93 @@ function hash(x: number, z: number, seed: number): number {
 function makeGeometry(positions: number[], indices: number[]): THREE.BufferGeometry | null {
   if (positions.length < 12 || indices.length < 6) return null;
   const geometry = new THREE.BufferGeometry();
+  const uvs: number[] = [];
+  for (let index = 0; index < positions.length; index += 3) {
+    // Eight-metre world-space texture tiles line up between 512 m chunks,
+    // including curved ramps whose vertices are generated in chunk-local space.
+    uvs.push(positions[index] / 8, positions[index + 2] / 8);
+  }
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   return geometry;
+}
+
+interface AsphaltTextureSet {
+  colour: THREE.DataTexture;
+  normal: THREE.DataTexture;
+  roughness: THREE.DataTexture;
+}
+
+/** Small deterministic PBR maps; one shared set serves every streamed chunk. */
+function createAsphaltTextures(): AsphaltTextureSet {
+  const size = 256;
+  const pixelCount = size * size;
+  const height = new Float32Array(pixelCount);
+  const colourData = new Uint8Array(pixelCount * 4);
+  const normalData = new Uint8Array(pixelCount * 4);
+  const roughnessData = new Uint8Array(pixelCount * 4);
+  const indexAt = (x: number, y: number): number =>
+    (((y + size) % size) * size) + ((x + size) % size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const index = indexAt(x, y);
+      const fine = hash(x, y, 0x41535048) & 0xff;
+      const coarse = hash(x >> 3, y >> 3, 0x524f4144) & 0xff;
+      const grain = ((fine - 127.5) * 0.075) + ((coarse - 127.5) * 0.11);
+      height[index] = grain;
+      const luminance = THREE.MathUtils.clamp(67 + grain, 42, 94);
+      const offset = index * 4;
+      colourData[offset] = luminance;
+      colourData[offset + 1] = luminance + 2;
+      colourData[offset + 2] = luminance + 4;
+      colourData[offset + 3] = 255;
+      const roughness = 225 + (fine & 0x0f);
+      roughnessData[offset] = roughness;
+      roughnessData[offset + 1] = roughness;
+      roughnessData[offset + 2] = roughness;
+      roughnessData[offset + 3] = 255;
+    }
+  }
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const index = indexAt(x, y);
+      const dx = (height[indexAt(x + 1, y)] - height[indexAt(x - 1, y)]) * 0.035;
+      const dy = (height[indexAt(x, y + 1)] - height[indexAt(x, y - 1)]) * 0.035;
+      const nx = -dx;
+      const ny = -dy;
+      const nz = 1;
+      const length = Math.hypot(nx, ny, nz);
+      const offset = index * 4;
+      normalData[offset] = Math.round((nx / length * 0.5 + 0.5) * 255);
+      normalData[offset + 1] = Math.round((ny / length * 0.5 + 0.5) * 255);
+      normalData[offset + 2] = Math.round((nz / length * 0.5 + 0.5) * 255);
+      normalData[offset + 3] = 255;
+    }
+  }
+
+  const create = (data: Uint8Array, colourSpace?: THREE.ColorSpace): THREE.DataTexture => {
+    const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.generateMipmaps = true;
+    texture.anisotropy = 4;
+    if (colourSpace) texture.colorSpace = colourSpace;
+    texture.needsUpdate = true;
+    return texture;
+  };
+
+  return {
+    colour: create(colourData, THREE.SRGBColorSpace),
+    normal: create(normalData),
+    roughness: create(roughnessData),
+  };
 }
 function pushRect(
   positions: number[], indices: number[],
@@ -105,12 +187,18 @@ export class NYCCityChunkManager {
   private centerKey: string | null = null;
   private disposed = false;
 
+  private readonly asphaltTextures = createAsphaltTextures();
   private readonly groundMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff, roughness: 1, metalness: 0,
     side: THREE.DoubleSide, vertexColors: true,
   });
   private readonly roadMaterial = new THREE.MeshStandardMaterial({
-    color: 0x292e33, roughness: 0.94, metalness: 0.02, side: THREE.DoubleSide,
+    color: 0xffffff,
+    map: this.asphaltTextures.colour,
+    normalMap: this.asphaltTextures.normal,
+    normalScale: new THREE.Vector2(0.22, 0.22),
+    roughnessMap: this.asphaltTextures.roughness,
+    roughness: 0.96, metalness: 0, side: THREE.DoubleSide,
   });
   private readonly sidewalkMaterial = new THREE.MeshStandardMaterial({
     color: 0x777c80, roughness: 0.96, side: THREE.DoubleSide,
@@ -258,6 +346,9 @@ export class NYCCityChunkManager {
       this.bridgeConcreteMaterial, this.bridgeUndersideMaterial, this.bridgeBarrierMaterial,
       this.underpassMaterial, this.underpassLightMaterial,
     ]) material.dispose();
+    this.asphaltTextures.colour.dispose();
+    this.asphaltTextures.normal.dispose();
+    this.asphaltTextures.roughness.dispose();
     this.bridgePierGeometry.dispose();
     this.unitBox.dispose();
     this.lampGeometry.dispose();
