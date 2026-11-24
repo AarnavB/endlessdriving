@@ -31,6 +31,29 @@ try {
 
   await RAPIER.init();
 
+  // Verify that the same dynamic chassis used by the road drivetrain retains
+  // an uphill road tangent as pitch, rather than flattening it to yaw alone.
+  const inclineWorld = new RAPIER.World({ x: 0, y: 0, z: 0 });
+  const inclineScene = new THREE.Scene();
+  const inclineVehicle = new VehicleController(inclineWorld, inclineScene, VEHICLE_CATALOGUE[0]);
+  const inclineHeading = new THREE.Vector3(0, 0.055, 1).normalize();
+  try {
+    inclineVehicle.reset(new THREE.Vector3(0, 8, 0), false, inclineHeading);
+    inclineWorld.step();
+    const bodyRotation = inclineVehicle.body.rotation();
+    const alignedHeading = new THREE.Vector3(0, 0, 1)
+      .applyQuaternion(new THREE.Quaternion(
+        bodyRotation.x, bodyRotation.y, bodyRotation.z, bodyRotation.w,
+      )).normalize();
+    assert(
+      alignedHeading.distanceTo(inclineHeading) < 1e-5,
+      'vehicle reset preserves the full three-dimensional incline tangent after a physics step',
+    );
+  } finally {
+    inclineVehicle.dispose(inclineWorld, inclineScene);
+    inclineWorld.free();
+  }
+
   function createSimulation(definition, manual = false, dt = FIXED_DT) {
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     world.timestep = dt;
@@ -813,7 +836,8 @@ try {
   }
 
   console.log(JSON.stringify({
-    simulation: 'Rapier DynamicRayCastVehicleController with a flat static ground collider',
+    simulation: 'Rapier DynamicRayCastVehicleController with flat and inclined-road alignment coverage',
+    inclineAlignment: { gradePercent: 5.5, result: 'PASS' },
     fixedTimestepSeconds: FIXED_DT,
     vehicleRuns,
     scenarioRuns,
