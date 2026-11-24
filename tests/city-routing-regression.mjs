@@ -181,6 +181,12 @@ try {
     'generated block facades include instanced shopfront glazing, frames and retail sign bands');
   assert(/arrow\.rotation\.z = Math\.PI/.test(trafficSource),
     'protected arrows are oriented left in the rendered signal face');
+  assert(/new THREE\.Sprite\(approach\.lamps\.redGlow\)/.test(trafficSource),
+    'signal heads render camera-facing radial glow sprites over the red lens');
+  assert(/THREE\.AdditiveBlending/.test(trafficSource) && /toneMapped: false/.test(trafficSource),
+    'signal halo uses additive, un-tonemapped materials rather than relying on exposure alone');
+  assert(/signalGlowTexture\.dispose\(\)/.test(trafficSource),
+    'shared signal glow texture is released with traffic infrastructure');
 
   await RAPIER.init();
   physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -204,8 +210,23 @@ try {
 
   traffic = new TrafficSystem(physics, scene, graph, playerPosition);
   assert.equal(traffic.getDiagnostics().activeVehicles, 10, 'graph traffic creates its bounded vehicle pool');
-  assert.equal(scene.children.filter((object) => object.name.startsWith('traffic-signals-')).length, 9,
+  const signalGroups = scene.children.filter((object) => object.name.startsWith('traffic-signals-'));
+  assert.equal(signalGroups.length, 9,
     'traffic system renders signal assemblies at the bounded nearby intersection set');
+  const signalSprites = [];
+  for (const signalGroup of signalGroups) {
+    signalGroup.traverse((object) => {
+      if (object instanceof THREE.Sprite) signalSprites.push(object);
+    });
+  }
+  assert(signalSprites.length >= 9 * 12,
+    'each streamed signal assembly has three luminous lens halos per approach head');
+  const glowMaterials = signalSprites.map((sprite) => sprite.material);
+  assert(glowMaterials.every((material) => material instanceof THREE.SpriteMaterial
+    && material.map && material.blending === THREE.AdditiveBlending),
+  'signal glow sprites use shared radial textures and additive blending');
+  assert(glowMaterials.some((material) => material.opacity > 0),
+    'controller state activates at least one visible signal-lens halo');
 
   const playerBody = physics.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
     .setTranslation(playerPosition.x, playerPosition.y, playerPosition.z)
@@ -253,6 +274,14 @@ try {
     'world disposal removes streamed scene objects');
   assert.equal(scene.children.filter((object) => object.name.startsWith('traffic-signals-')).length, 0,
     'traffic disposal removes signal meshes and their scene objects');
+  const remainingSignalSprites = [];
+  for (const object of scene.children) {
+    object.traverse((child) => {
+      if (child instanceof THREE.Sprite) remainingSignalSprites.push(child);
+    });
+  }
+  assert.equal(remainingSignalSprites.length, 0,
+    'traffic disposal removes all signal glow sprites from the scene');
 
   console.log(JSON.stringify({
     suite: 'city graph, streaming, traffic and Rapier integration regression',
