@@ -566,30 +566,59 @@ export class NYCCityChunkManager {
     const lastGX = Math.ceil(maxX / CITY_BLOCK_SPACING_M);
     const firstGZ = Math.floor(minZ / CITY_BLOCK_SPACING_M);
     const lastGZ = Math.ceil(maxZ / CITY_BLOCK_SPACING_M);
+
+    // Keep parcels on a deterministic 2x2 block plan. The building fronts
+    // face the surrounding streets, while the centre gap leaves service and
+    // light-well space instead of a field of isolated random boxes.
     for (let gx = firstGX; gx < lastGX; gx++) {
       for (let gz = firstGZ; gz < lastGZ; gz++) {
         const centreX = (gx + 0.5) * CITY_BLOCK_SPACING_M;
         const centreZ = (gz + 0.5) * CITY_BLOCK_SPACING_M;
         if (centreX < minX || centreX >= maxX || centreZ < minZ || centreZ >= maxZ) continue;
         const blockHash = hash(gx, gz, this.graph.seed);
-        const count = 2 + (blockHash % 2);
-        for (let i = 0; i < count; i++) {
+        const blockRadius = Math.hypot(gx, gz);
+        const industrial = blockRadius > 16 && blockHash % 7 === 0;
+        const district = blockRadius <= 4 ? 'core'
+          : blockRadius <= 10 ? 'commercial'
+            : blockRadius <= 20 ? 'residential'
+              : industrial ? 'industrial' : 'outer';
+
+        for (let i = 0; i < 4; i++) {
           const value = hash(gx * 7 + i, gz * 11 - i, this.graph.seed ^ 0x51f2);
-          const offsetX = i === 0 ? -31 : i === 1 ? 31 : 0;
-          const offsetZ = i === 0 ? 14 : i === 1 ? -15 : 43;
-          const width = 22 + (value % 1300) / 100;
-          const depth = 25 + ((value >>> 8) % 1050) / 100;
+          const offsetX = i % 2 === 0 ? -32 : 32;
+          const offsetZ = i < 2 ? -32 : 32;
+          const width = 46 + (value % 900) / 100;
+          const depth = 45 + ((value >>> 8) % 1000) / 100;
           const style = (value >>> 18) % 6;
-          const height = style === 0 ? 66 + ((value >>> 5) % 1000) / 10
-            : style === 1 ? 17 + ((value >>> 7) % 240) / 10
-              : style === 2 ? 28 + ((value >>> 10) % 480) / 10
-                : 11 + ((value >>> 12) % 180) / 10;
+          const variation = ((value >>> 23) % 1000) / 100;
+
+          let height: number;
+          if (district === 'core') {
+            height = style === 0 ? 118 + variation * 6.4
+              : style === 1 ? 78 + variation * 4.1
+                : style === 2 ? 48 + variation * 3.2
+                  : 22 + variation * 3.4;
+          } else if (district === 'commercial') {
+            height = style === 0 ? 74 + variation * 4.1
+              : style === 1 ? 42 + variation * 3.4
+                : 20 + variation * 3.1;
+          } else if (district === 'residential') {
+            height = style === 0 ? 38 + variation * 2.6
+              : style === 1 ? 21 + variation * 2.1
+                : 11 + variation * 1.7;
+          } else if (district === 'industrial') {
+            height = 8 + variation * 1.5;
+          } else {
+            height = style === 0 ? 45 + variation * 2.8
+              : 14 + variation * 2.9;
+          }
+
           result.push({
             x: centreX + offsetX,
             z: centreZ + offsetZ,
             width,
             depth,
-            height: Math.min(165, height),
+            height: Math.min(190, height),
             colour: colourForBuilding(style),
           });
         }
