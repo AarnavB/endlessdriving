@@ -45,7 +45,7 @@ let traffic;
 try {
   await transpile(waterfrontLayoutPath, waterfrontLayoutTemp);
   await transpile(graphPath, graphTemp, [
-    ["from './NYCWaterfrontLayout'", "from './.NYCWaterfrontLayout.regression.mjs'"],
+    ['from "./NYCWaterfrontLayout"', 'from "./.NYCWaterfrontLayout.regression.mjs"'],
   ]);
   await transpile(urbanPath, urbanTemp);
   await transpile(managerPath, managerTemp, [

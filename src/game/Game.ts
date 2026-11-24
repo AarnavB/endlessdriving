@@ -55,12 +55,14 @@ export class Game {
   private fps = 0;
   private dayPhase = 0.38;
   private nightBlend = 0;
+  private readonly graphicsQuality: GameSettings['graphics'];
   private readonly hemi = new THREE.HemisphereLight(0xdbe9f2, 0x373d43, 0.85);
   private readonly sun = new THREE.DirectionalLight(0xffe3bd, 3.0);
   private readonly environmentLighting: NYCEnvironmentLighting;
 
   private constructor(canvas: HTMLCanvasElement, uiRoot: HTMLElement, settings: GameSettings) {
     this.manualTransmission = settings.transmission === 'manual';
+    this.graphicsQuality = settings.graphics;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: settings.graphics === 'high',
@@ -257,7 +259,7 @@ export class Game {
     const cityWorld = new NYCCityChunkManager(this.scene, this.physics, this.roadGraph);
     await cityWorld.initialize(spawnPosition);
     this.worldScene = cityWorld;
-    this.waterfront = new NYCWaterfrontSystem(this.scene, this.physics, settings.graphics);
+    this.waterfront = new NYCWaterfrontSystem(this.scene, this.physics, this.graphicsQuality);
 
     this.vehicle = new VehicleController(this.physics, this.scene, getVehicleDefinition(loadSelectedVehicleId()));
     this.vehicle.setManualTransmission(this.manualTransmission);
