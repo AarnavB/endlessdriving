@@ -477,7 +477,8 @@
 .gauge-pair { gap: clamp(6px, .85vw, 13px); }
 .analogue-gauge { width: clamp(126px, 14.2vw, 184px); }
 .gauge-readout {
-  top: 46%;
+  top: 53%;
+  left: 55%;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -502,6 +503,18 @@
 .gauge-gear.is-neutral,
 .gauge-gear.is-reverse { border: 0; background: transparent; }
 .rpm-gauge.is-redline .gauge-readout { border: 0; box-shadow: none; }
+.handbrake-status {
+  align-self: center;
+  padding: 3px 7px;
+  border: 1px solid rgba(239, 104, 72, .7);
+  border-radius: 3px;
+  background: rgba(125, 34, 26, .35);
+  color: #ffad96;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 1.2px;
+  text-shadow: 0 0 8px rgba(255, 100, 72, .32);
+}
 .instrument-controls {
   width: 100%;
   padding: 5px 4px 3px;
