@@ -1,0 +1,46 @@
+name: NYC world and vehicle regression checks
+
+on:
+  push:
+    branches:
+      - feat/nyc-world-rebuild
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nyc-world-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: TypeScript and production build
+        run: npm run build
+
+      - name: Drivetrain and vehicle physics regressions
+        run: npm run test:drivetrain
+
+      - name: NYC geospatial regressions
+        run: npm run test:nyc-geo
+
+      - name: City graph and routing regressions
+        run: npm run test:city-routing
+
+      - name: Combined world regressions
+        run: npm run test:world
