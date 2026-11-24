@@ -194,27 +194,35 @@ export class VehicleController {
 
     const q = this.body.rotation();
     this.scratchQuat.set(q.x, q.y, q.z, q.w);
-    this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
+    this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat);
+    const horizontalLength = Math.hypot(this.forward.x, this.forward.z) || 1;
     const yaw = Math.atan2(this.forward.x, this.forward.z);
+    const currentPitch = Math.atan2(this.forward.y, horizontalLength);
     this.appliedRoadPitch = THREE.MathUtils.damp(
       this.appliedRoadPitch, this.targetRoadPitch, 10, safeDt,
     );
-    const halfYaw = yaw * 0.5;
-    const halfPitch = -this.appliedRoadPitch * 0.5;
-    const sinYaw = Math.sin(halfYaw);
-    const cosYaw = Math.cos(halfYaw);
-    const sinPitch = Math.sin(halfPitch);
-    const cosPitch = Math.cos(halfPitch);
-    this.roadPitchRotation.x = cosYaw * sinPitch;
-    this.roadPitchRotation.y = sinYaw * cosPitch;
-    this.roadPitchRotation.z = -sinYaw * sinPitch;
-    this.roadPitchRotation.w = cosYaw * cosPitch;
-    this.body.setRotation(this.roadPitchRotation, true);
-    this.scratchQuat.set(
-      this.roadPitchRotation.x, this.roadPitchRotation.y,
-      this.roadPitchRotation.z, this.roadPitchRotation.w,
-    );
-    this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat).setY(0).normalize();
+    // Do not rewrite a level chassis transform every tick: preserving the
+    // physics solver's untouched flat-road transform avoids perturbing tyre
+    // contact and the existing speed-sensitive steering response.
+    if (Math.abs(this.appliedRoadPitch - currentPitch) > 1e-4) {
+      const halfYaw = yaw * 0.5;
+      const halfPitch = -this.appliedRoadPitch * 0.5;
+      const sinYaw = Math.sin(halfYaw);
+      const cosYaw = Math.cos(halfYaw);
+      const sinPitch = Math.sin(halfPitch);
+      const cosPitch = Math.cos(halfPitch);
+      this.roadPitchRotation.x = cosYaw * sinPitch;
+      this.roadPitchRotation.y = sinYaw * cosPitch;
+      this.roadPitchRotation.z = -sinYaw * sinPitch;
+      this.roadPitchRotation.w = cosYaw * cosPitch;
+      this.body.setRotation(this.roadPitchRotation, true);
+      this.scratchQuat.set(
+        this.roadPitchRotation.x, this.roadPitchRotation.y,
+        this.roadPitchRotation.z, this.roadPitchRotation.w,
+      );
+      this.forward.set(0, 0, 1).applyQuaternion(this.scratchQuat);
+    }
+    this.forward.setY(0).normalize();
 
     const bodyVelocity = this.body.linvel();
     this.velocity.set(bodyVelocity.x, 0, bodyVelocity.z);
