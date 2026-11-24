@@ -176,6 +176,7 @@ export class Game {
       position.z + this.worldOffset.z,
       forward.x,
       forward.z,
+      position.y + this.worldOffset.y,
     );
     return new THREE.Vector3(tangent.x, tangent.y, tangent.z);
   }
