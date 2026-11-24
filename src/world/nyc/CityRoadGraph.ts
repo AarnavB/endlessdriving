@@ -634,16 +634,28 @@ export class CityRoadGraph {
     if (Math.abs(gridX) % 8 !== 0 || (gridX >= -3 && gridX <= 5)) return;
     const groundNodeId = this.getIntersectionId(gridX, 2);
     this.getIntersection(groundNodeId);
+
+    // The climb is deliberately routed beside the expressway deck. A single
+    // diagonal ramp would pass through the deck footprint before reaching its
+    // elevation; the parallel climb keeps a clear vertical and lateral envelope.
     const rampMidNodeId = this.getIntersectionId(gridX + 1, 3, 1);
-    const deckNodeId = this.ensureHighwayNode(gridX + 2);
+    const rampTopNodeId = this.getIntersectionId(gridX + 2, 3, 1);
+    const deckNodeId = this.ensureHighwayNode(gridX + 3);
+    const startX = gridX * CITY_BLOCK_SPACING_M;
+    const rampOffsetZ = 360;
+    const midX = startX + CITY_BLOCK_SPACING_M;
+    const topX = startX + CITY_BLOCK_SPACING_M * 2;
     if (!this.intersections.has(rampMidNodeId)) {
       this.registerNode(
         rampMidNodeId, gridX + 1, 3,
-        {
-          x: (gridX + 1) * CITY_BLOCK_SPACING_M,
-          y: CITY_HIGHWAY_ELEVATION_M * 0.5,
-          z: 336,
-        },
+        { x: midX, y: CITY_HIGHWAY_ELEVATION_M * 0.5, z: rampOffsetZ },
+        1, "ramp", "merge", false,
+      );
+    }
+    if (!this.intersections.has(rampTopNodeId)) {
+      this.registerNode(
+        rampTopNodeId, gridX + 2, 3,
+        { x: topX, y: CITY_HIGHWAY_ELEVATION_M, z: rampOffsetZ },
         1, "ramp", "merge", false,
       );
     }
@@ -651,33 +663,44 @@ export class CityRoadGraph {
       category: "ramp", axis: "x", lineIndex: 2, lanesPerDirection: 1,
       laneWidthM: 3.55, widthM: 9.4, speedLimitKmh: 45, directionality: "both",
     };
-    const startX = gridX * CITY_BLOCK_SPACING_M;
-    const firstId = "nyc:ramp:" + String(gridX) + ":lower";
-    const secondId = "nyc:ramp:" + String(gridX) + ":upper";
-    if (!this.customSegments.has(firstId)) {
+    const lowerId = "nyc:ramp:" + String(gridX) + ":lower";
+    const climbId = "nyc:ramp:" + String(gridX) + ":climb";
+    const mergeId = "nyc:ramp:" + String(gridX) + ":merge";
+    if (!this.customSegments.has(lowerId)) {
       this.registerCustomSegment(
-        firstId, groundNodeId, rampMidNodeId, "entrance-ramp", rampProfile,
+        lowerId, groundNodeId, rampMidNodeId, "entrance-ramp", rampProfile,
         [
           { x: startX + CITY_BLOCK_SPACING_M / 3, y: 0, z: 320 },
-          { x: startX + CITY_BLOCK_SPACING_M * 2 / 3, y: CITY_HIGHWAY_ELEVATION_M * 0.5, z: 336 },
+          { x: startX + CITY_BLOCK_SPACING_M * 2 / 3, y: CITY_HIGHWAY_ELEVATION_M * 0.5, z: rampOffsetZ },
         ],
-        "Procedural expressway entrance and exit ramp - lower transition",
+        "Procedural expressway entrance ramp - lower transition",
         0.045,
       );
     }
-    if (!this.customSegments.has(secondId)) {
+    if (!this.customSegments.has(climbId)) {
       this.registerCustomSegment(
-        secondId, rampMidNodeId, deckNodeId, "exit-ramp", rampProfile,
+        climbId, rampMidNodeId, rampTopNodeId, "entrance-ramp", rampProfile,
         [
-          { x: startX + CITY_BLOCK_SPACING_M * 4 / 3, y: CITY_HIGHWAY_ELEVATION_M * 0.5, z: 336 },
-          { x: startX + CITY_BLOCK_SPACING_M * 5 / 3, y: CITY_HIGHWAY_ELEVATION_M, z: 320 },
+          { x: midX + CITY_BLOCK_SPACING_M / 3, y: CITY_HIGHWAY_ELEVATION_M * 0.5, z: rampOffsetZ },
+          { x: midX + CITY_BLOCK_SPACING_M * 2 / 3, y: CITY_HIGHWAY_ELEVATION_M, z: rampOffsetZ },
         ],
-        "Procedural expressway merge ramp - upper transition",
+        "Procedural expressway entrance ramp - parallel climb",
         0.045,
       );
     }
-    this.ensureHighwaySegment(gridX + 1);
+    if (!this.customSegments.has(mergeId)) {
+      this.registerCustomSegment(
+        mergeId, rampTopNodeId, deckNodeId, "exit-ramp", rampProfile,
+        [
+          { x: topX + CITY_BLOCK_SPACING_M / 3, y: CITY_HIGHWAY_ELEVATION_M, z: rampOffsetZ },
+          { x: topX + CITY_BLOCK_SPACING_M * 2 / 3, y: CITY_HIGHWAY_ELEVATION_M, z: 320 },
+        ],
+        "Procedural expressway merge ramp - level transition",
+        0.045,
+      );
+    }
     this.ensureHighwaySegment(gridX + 2);
+    this.ensureHighwaySegment(gridX + 3);
   }
 
   private registerNode(
