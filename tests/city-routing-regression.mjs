@@ -175,19 +175,20 @@ try {
   // A remote chunk deterministically materialises the same elevated corridor
   // and a second ramp pair; multi-level generation is not limited to the
   // representative interchange around the origin.
-  const remoteSegments = graph.getSpecialSegmentsInBounds(1024, 1792, 290, 350);
+  const remoteSegments = graph.getSpecialSegmentsInBounds(1024, 1792, 290, 380);
   assert(remoteSegments.some((segment) => segment.roadType === 'elevated-highway'),
     'distant streamed chunks generate continuous elevated expressway segments');
   assert(remoteSegments.some((segment) => segment.id === 'nyc:ramp:8:lower')
-    && remoteSegments.some((segment) => segment.id === 'nyc:ramp:8:upper'),
+    && remoteSegments.some((segment) => segment.id === 'nyc:ramp:8:climb')
+    && remoteSegments.some((segment) => segment.id === 'nyc:ramp:8:merge'),
     'distant chunks generate a deterministic, connected procedural ramp pair');
   const remoteGroundNode = graph.getIntersectionId(8, 2);
-  const remoteDeckNode = graph.getIntersectionId(10, 2, 1);
+  const remoteDeckNode = graph.getIntersectionId(11, 2, 1);
   const remoteRampRoute = graph.findRoute(remoteGroundNode, remoteDeckNode);
   assert(remoteRampRoute.some((edge) => graph.getSegment(edge.segmentId).roadType === 'entrance-ramp')
     && remoteRampRoute.some((edge) => graph.getSegment(edge.segmentId).roadType === 'exit-ramp'),
     'a second interchange connects ground traffic onto the remote elevated corridor');
-  const remoteRamp = graph.getSegment('nyc:ramp:8:upper');
+  const remoteRamp = graph.getSegment('nyc:ramp:8:climb');
   let remoteMaximumGrade = 0;
   let remotePrevious = graph.getCenterlinePose(remoteRamp.id, 0).position;
   for (let sample = 1; sample <= 32; sample++) {
