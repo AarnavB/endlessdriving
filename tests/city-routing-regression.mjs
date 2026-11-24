@@ -132,6 +132,10 @@ try {
       'opposing left-turn approaches never receive simultaneous protected permission');
     northLeftPhaseSeen ||= northPermission;
     southLeftPhaseSeen ||= southPermission;
+    assert.equal(signals.getProtectedLeftTurnState(signalNode, 'z', 1),
+      northPermission ? 'green' : 'red', 'north left-turn arrow tracks its protected approach phase');
+    assert.equal(signals.getProtectedLeftTurnState(signalNode, 'z', -1),
+      southPermission ? 'green' : 'red', 'south left-turn arrow tracks its protected approach phase');
     signals.advance(0.1);
   }
   assert(northLeftPhaseSeen && southLeftPhaseSeen,
@@ -163,6 +167,8 @@ try {
     'traffic uses the same authoritative graph');
   assert(/CityTrafficController/.test(trafficSource) && /getLanePose/.test(trafficSource),
     'traffic routes by edge and lane rather than scalar road distance');
+  assert(/createSignalAssembly/.test(trafficSource) && /getProtectedLeftTurnState/.test(trafficSource),
+    'rendered signal heads and protected arrows are connected to live traffic phases');
   assert(/setNextKinematicTranslation/.test(trafficSource) && /setNextKinematicRotation/.test(trafficSource),
     'AI transforms are submitted through Rapier kinematic bodies');
   assert(/removeRigidBody\(chunk\.body\)/.test(managerSource) && /geometry\.dispose\(\)/.test(managerSource),
@@ -187,6 +193,8 @@ try {
 
   traffic = new TrafficSystem(physics, scene, graph, playerPosition);
   assert.equal(traffic.getDiagnostics().activeVehicles, 10, 'graph traffic creates its bounded vehicle pool');
+  assert.equal(scene.children.filter((object) => object.name.startsWith('traffic-signals-')).length, 9,
+    'traffic system renders signal assemblies at the bounded nearby intersection set');
 
   const playerBody = physics.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
     .setTranslation(playerPosition.x, playerPosition.y, playerPosition.z)
@@ -206,17 +214,25 @@ try {
   const chunkGroup = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
   assert(chunkGroup, 'streamed geometry is present in the Three.js scene');
   const beforeRebaseX = chunkGroup.position.x;
+  const signalGroup = scene.children.find((object) => object.name.startsWith('traffic-signals-'));
+  assert(signalGroup, 'traffic signal scene group is available for rebase validation');
+  const beforeSignalX = signalGroup.position.x;
   const rebaseDelta = new THREE.Vector3(128, 0, 0);
   manager.rebase(rebaseDelta);
   traffic.rebase(rebaseDelta);
   assert(Math.abs(chunkGroup.position.x - (beforeRebaseX - 128)) < 1e-8,
     'streamed chunk meshes shift by the exact rebase delta');
+  assert(Math.abs(signalGroup.position.x - (beforeSignalX - 128)) < 1e-8,
+    'traffic signal models shift by the exact rebase delta');
 
   playerPosition.x += 600;
   manager.update(playerPosition);
+  traffic.update(1 / 60, playerPosition);
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert(manager.getDiagnostics().activeChunks <= 9,
     'chunk streaming unloads distant chunks and maintains a bounded active set');
+  assert.equal(scene.children.filter((object) => object.name.startsWith('traffic-signals-')).length, 9,
+    'signal streaming rebuilds a bounded visible intersection set around the player');
 
   traffic.dispose();
   manager.dispose();
@@ -224,6 +240,8 @@ try {
   assert.equal(traffic.getDiagnostics().activeVehicles, 0, 'traffic disposal clears pooled vehicles');
   assert.equal(scene.children.filter((object) => object.name.startsWith('fictional-city-chunk-')).length, 0,
     'world disposal removes streamed scene objects');
+  assert.equal(scene.children.filter((object) => object.name.startsWith('traffic-signals-')).length, 0,
+    'traffic disposal removes signal meshes and their scene objects');
 
   console.log(JSON.stringify({
     suite: 'city graph, streaming, traffic and Rapier integration regression',
@@ -232,7 +250,7 @@ try {
     runtimeChunksLoaded: initialChunks.activeChunks,
     trafficPool: 10,
     headlessPhysicsFrames: 120,
-    assertions: 37,
+    assertions: 44,
     result: 'PASS',
   }, null, 2));
 } finally {
