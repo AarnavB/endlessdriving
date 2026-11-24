@@ -29,10 +29,21 @@ assert(Math.abs(restored.latitude - midtownPoint.latitude) < 1e-8, 'latitude rou
 assert(Math.abs(restored.longitude - midtownPoint.longitude) < 1e-8, 'longitude round-trip');
 assert(Math.abs(restored.altitudeM - midtownPoint.altitudeM) < 0.02, 'altitude round-trip');
 
-const nearby = geo.geographicToLocal({ latitude: 40.7595, longitude: -73.9896 });
-const haversine = geo.haversineDistanceM(origin, { latitude: 40.7595, longitude: -73.9896 });
-const enuDistance = Math.hypot(nearby.x, nearby.y, nearby.z);
-assert(Math.abs(enuDistance - haversine) < 0.02, 'local ENU distance should match geodesic distance');
+const nearbyPoint = { latitude: 40.7595, longitude: -73.9896, altitudeM: origin.altitudeM };
+const nearby = geo.geographicToLocal(nearbyPoint);
+const haversine = geo.haversineDistanceM(origin, nearbyPoint);
+const enuHorizontalDistance = Math.hypot(nearby.x, nearby.z);
+const latitudeRadians = origin.latitude * Math.PI / 180;
+const flattening = 1 / geo.WGS84.inverseFlattening;
+const eccentricitySquared = flattening * (2 - flattening);
+const primeVerticalRadius = geo.WGS84.semiMajorAxisM
+  / Math.sqrt(1 - eccentricitySquared * Math.sin(latitudeRadians) ** 2);
+const expectedParallelDistance = primeVerticalRadius * Math.cos(latitudeRadians)
+  * Math.abs((nearbyPoint.longitude - origin.longitude) * Math.PI / 180);
+assert(Math.abs(enuHorizontalDistance - expectedParallelDistance) < 0.001,
+  'local ENU horizontal distance should match the WGS84 ellipsoid scale');
+assert(Math.abs(enuHorizontalDistance - haversine) < 0.3,
+  'local ENU distance should remain within tolerance of the spherical haversine approximation');
 
 assert.deepEqual(geo.getChunkIndex(-0.01, -0.01), { x: -1, z: -1 });
 assert.deepEqual(geo.getChunkIndex(-512.01, -512.01), { x: -2, z: -2 });
