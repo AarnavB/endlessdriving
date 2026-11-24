@@ -5,6 +5,7 @@ import {
   CITY_CHUNK_SIZE_M,
   CityRoadGraph,
 } from './CityRoadGraph';
+import type { CityRoadSegment } from './CityRoadGraph';
 
 interface CityChunk {
   key: string;
@@ -27,6 +28,12 @@ interface CurbSpec {
   z: number;
   length: number;
   alongX: boolean;
+}
+interface RibbonBounds { minX: number; maxX: number; minZ: number; maxZ: number; }
+interface InstanceSpec {
+  position: THREE.Vector3;
+  rotation: THREE.Quaternion;
+  scale: THREE.Vector3;
 }
 
 const STREAM_RADIUS = 1;
@@ -143,6 +150,22 @@ export class NYCCityChunkManager {
     color: 0xffe0a8, emissive: 0xffbd70, emissiveIntensity: 0.25,
   });
   private readonly treeMaterial = new THREE.MeshStandardMaterial({ color: 0x42644f, roughness: 1 });
+  private readonly bridgeConcreteMaterial = new THREE.MeshStandardMaterial({
+    color: 0x777d80, roughness: 0.91, metalness: 0.03,
+  });
+  private readonly bridgeUndersideMaterial = new THREE.MeshStandardMaterial({
+    color: 0x555d62, roughness: 0.96, side: THREE.DoubleSide,
+  });
+  private readonly bridgeBarrierMaterial = new THREE.MeshStandardMaterial({
+    color: 0xb8b9b5, roughness: 0.83, metalness: 0.04,
+  });
+  private readonly underpassMaterial = new THREE.MeshStandardMaterial({
+    color: 0x343a3e, roughness: 0.92, metalness: 0.03, side: THREE.DoubleSide,
+  });
+  private readonly underpassLightMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffc77d, toneMapped: false,
+  });
+  private readonly bridgePierGeometry = new THREE.CylinderGeometry(0.7, 0.95, 1, 12);
 
   private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
   private readonly lampGeometry = new THREE.SphereGeometry(0.2, 8, 6);
@@ -230,7 +253,10 @@ export class NYCCityChunkManager {
       this.curbMaterial, this.buildingMaterial, this.storefrontMaterial, this.storefrontFrameMaterial,
       this.retailSignMaterial, this.windowMaterial, this.rooftopMaterial,
       this.poleMaterial, this.lampMaterial, this.treeMaterial,
+      this.bridgeConcreteMaterial, this.bridgeUndersideMaterial, this.bridgeBarrierMaterial,
+      this.underpassMaterial, this.underpassLightMaterial,
     ]) material.dispose();
+    this.bridgePierGeometry.dispose();
     this.unitBox.dispose();
     this.lampGeometry.dispose();
     this.treeGeometry.dispose();
@@ -308,6 +334,14 @@ export class NYCCityChunkManager {
     const crosswalkPositions: number[] = [], crosswalkIndices: number[] = [];
     const curbs: CurbSpec[] = [];
     const roadLines = new Set<string>();
+    const chunkBounds: RibbonBounds = { minX, maxX, minZ, maxZ };
+    const elevatedRoadPositions: number[] = [], elevatedRoadIndices: number[] = [];
+    const elevatedUndersidePositions: number[] = [], elevatedUndersideIndices: number[] = [];
+    const elevatedWhitePositions: number[] = [], elevatedWhiteIndices: number[] = [];
+    const elevatedYellowPositions: number[] = [], elevatedYellowIndices: number[] = [];
+    const barrierSpecs: InstanceSpec[] = [];
+    const pierSpecs: InstanceSpec[] = [];
+    const capSpecs: InstanceSpec[] = [];
 
     pushRect(groundPositions, groundIndices, centerX, centerZ,
       minX, maxX, minZ, maxZ, -0.405);
@@ -386,6 +420,30 @@ export class NYCCityChunkManager {
 
     this.addCrosswalks(firstX, lastX, firstZ, lastZ, centerX, centerZ, crosswalkPositions, crosswalkIndices);
 
+    // Elevated decks and ramps are sampled from the authoritative graph. Each
+    // chunk emits only the curve intervals whose centreline midpoint it owns.
+    const specialSegments = this.graph.getSpecialSegmentsInBounds(minX, maxX, minZ, maxZ);
+    for (const segment of specialSegments) {
+      this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+        elevatedRoadPositions, elevatedRoadIndices, segment.profile.widthM, 0, 0);
+      this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+        elevatedUndersidePositions, elevatedUndersideIndices, segment.profile.widthM, -1.2, 0);
+      if (segment.profile.directionality === 'both') {
+        this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+          elevatedYellowPositions, elevatedYellowIndices, 0.12, 0.045, -0.17);
+        this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+          elevatedYellowPositions, elevatedYellowIndices, 0.12, 0.045, 0.17);
+      }
+      for (const side of [-1, 1]) {
+        for (let lane = 1; lane < segment.profile.lanesPerDirection; lane++) {
+          this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+            elevatedWhitePositions, elevatedWhiteIndices, 0.105, 0.05,
+            side * lane * segment.profile.laneWidthM);
+        }
+      }
+      this.collectBridgeDetails(segment, chunkBounds, barrierSpecs, pierSpecs, capSpecs);
+    }
+
     const geometries: THREE.BufferGeometry[] = [];
     const groundGeometry = makeGeometry(groundPositions, groundIndices);
     const roadGeometry = makeGeometry(roadPositions, roadIndices);
@@ -393,6 +451,10 @@ export class NYCCityChunkManager {
     const whiteGeometry = makeGeometry(whitePositions, whiteIndices);
     const yellowGeometry = makeGeometry(yellowPositions, yellowIndices);
     const crosswalkGeometry = makeGeometry(crosswalkPositions, crosswalkIndices);
+    const elevatedRoadGeometry = makeGeometry(elevatedRoadPositions, elevatedRoadIndices);
+    const elevatedUndersideGeometry = makeGeometry(elevatedUndersidePositions, elevatedUndersideIndices);
+    const elevatedWhiteGeometry = makeGeometry(elevatedWhitePositions, elevatedWhiteIndices);
+    const elevatedYellowGeometry = makeGeometry(elevatedYellowPositions, elevatedYellowIndices);
     for (const [geometry, material, name] of [
       [groundGeometry, this.groundMaterial, 'visible-city-block-ground'],
       [roadGeometry, this.roadMaterial, 'asphalt-road-network'],
@@ -400,6 +462,10 @@ export class NYCCityChunkManager {
       [whiteGeometry, this.lineMaterial, 'lane-markings'],
       [yellowGeometry, this.centreLineMaterial, 'double-yellow-centrelines'],
       [crosswalkGeometry, this.lineMaterial, 'pedestrian-crossings'],
+      [elevatedRoadGeometry, this.roadMaterial, 'elevated-highways-and-ramps'],
+      [elevatedUndersideGeometry, this.bridgeUndersideMaterial, 'bridge-deck-undersides'],
+      [elevatedWhiteGeometry, this.lineMaterial, 'elevated-lane-markings'],
+      [elevatedYellowGeometry, this.centreLineMaterial, 'elevated-double-yellow-markings'],
     ] as Array<[THREE.BufferGeometry | null, THREE.Material, string]>) {
       if (!geometry) continue;
       geometries.push(geometry);
@@ -541,6 +607,9 @@ export class NYCCityChunkManager {
     }
 
     this.addStreetFurniture(group, cx, cz);
+    this.addBridgeInstances(group, centerX, centerZ, barrierSpecs, pierSpecs, capSpecs);
+    const hasUnderpassShell = minX <= 0 && maxX > 0 && minZ <= 320 && maxZ > 320;
+    if (hasUnderpassShell) this.addUnderpassShell(group, centerX, centerZ);
 
     const body = this.physics.createRigidBody(RAPIER.RigidBodyDesc.fixed()
       .setTranslation(group.position.x, group.position.y, group.position.z)
@@ -554,6 +623,29 @@ export class NYCCityChunkManager {
     );
     if (roadGeometry) this.addTrimeshCollider(body, roadGeometry, 0.96);
     if (sidewalkGeometry) this.addTrimeshCollider(body, sidewalkGeometry, 0.82);
+    // Top and soffit collision surfaces are independent. The top catches
+    // traffic on the deck; the lower surface only catches an over-height
+    // vehicle passing below, never a normal ground-level vehicle.
+    if (elevatedRoadGeometry) this.addTrimeshCollider(body, elevatedRoadGeometry, 0.96);
+    if (elevatedUndersideGeometry) this.addTrimeshCollider(body, elevatedUndersideGeometry, 0.78);
+    for (const pier of pierSpecs) {
+      const height = pier.scale.y;
+      this.physics.createCollider(
+        RAPIER.ColliderDesc.cuboid(pier.scale.x * 0.5, height * 0.5, pier.scale.z * 0.5)
+          .setTranslation(pier.position.x - centerX, height * 0.5, pier.position.z - centerZ)
+          .setFriction(0.82),
+        body,
+      );
+    }
+    for (const cap of capSpecs) {
+      this.physics.createCollider(
+        RAPIER.ColliderDesc.cuboid(cap.scale.x * 0.5, cap.scale.y * 0.5, cap.scale.z * 0.5)
+          .setTranslation(cap.position.x - centerX, cap.position.y, cap.position.z - centerZ)
+          .setFriction(0.82),
+        body,
+      );
+    }
+    if (hasUnderpassShell) this.addUnderpassColliders(body, centerX, centerZ);
     if (curbs.length > 0) {
       for (const curb of curbs) {
         const halfLength = curb.length * 0.5;
@@ -590,6 +682,186 @@ export class NYCCityChunkManager {
         .setFriction(friction).setRestitution(0),
       body,
     );
+  }
+
+  private appendRoadRibbon(
+    segment: CityRoadSegment,
+    bounds: RibbonBounds,
+    centerX: number,
+    centerZ: number,
+    positions: number[],
+    indices: number[],
+    width: number,
+    verticalOffset: number,
+    lateralOffset: number,
+  ): void {
+    const sampleCount = Math.max(8, Math.ceil(segment.lengthM / 4));
+    const samples: Array<{ left: THREE.Vector3; right: THREE.Vector3; center: THREE.Vector3 }> = [];
+    for (let i = 0; i <= sampleCount; i++) {
+      const distance = segment.lengthM * i / sampleCount;
+      const pose = this.graph.getCenterlinePose(segment.id, distance);
+      const center = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z)
+        .addScaledVector(new THREE.Vector3(pose.right.x, pose.right.y, pose.right.z), lateralOffset)
+        .addScaledVector(new THREE.Vector3(pose.up.x, pose.up.y, pose.up.z), verticalOffset);
+      const right = new THREE.Vector3(pose.right.x, pose.right.y, pose.right.z);
+      samples.push({
+        center,
+        left: center.clone().addScaledVector(right, -width * 0.5),
+        right: center.clone().addScaledVector(right, width * 0.5),
+      });
+    }
+    for (let i = 0; i < samples.length - 1; i++) {
+      const a = samples[i];
+      const b = samples[i + 1];
+      const midX = (a.center.x + b.center.x) * 0.5;
+      const midZ = (a.center.z + b.center.z) * 0.5;
+      if (midX < bounds.minX || midX >= bounds.maxX || midZ < bounds.minZ || midZ >= bounds.maxZ) continue;
+      const base = positions.length / 3;
+      positions.push(
+        a.left.x - centerX, a.left.y, a.left.z - centerZ,
+        a.right.x - centerX, a.right.y, a.right.z - centerZ,
+        b.left.x - centerX, b.left.y, b.left.z - centerZ,
+        b.right.x - centerX, b.right.y, b.right.z - centerZ,
+      );
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+    }
+  }
+
+  private collectBridgeDetails(
+    segment: CityRoadSegment,
+    bounds: RibbonBounds,
+    barriers: InstanceSpec[],
+    piers: InstanceSpec[],
+    caps: InstanceSpec[],
+  ): void {
+    if (segment.roadType === 'surface' || segment.roadType === 'underpass') return;
+    const forward = new THREE.Vector3(0, 0, 1);
+    const barrierRotation = new THREE.Quaternion();
+    for (let distance = 4; distance < segment.lengthM; distance += 8) {
+      const pose = this.graph.getCenterlinePose(segment.id, distance);
+      if (pose.position.x < bounds.minX || pose.position.x >= bounds.maxX
+        || pose.position.z < bounds.minZ || pose.position.z >= bounds.maxZ) continue;
+      const tangent = new THREE.Vector3(pose.tangent.x, 0, pose.tangent.z).normalize();
+      if (tangent.lengthSq() < 0.5) continue;
+      barrierRotation.setFromUnitVectors(forward, tangent);
+      for (const side of [-1, 1]) {
+        const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z)
+          .addScaledVector(new THREE.Vector3(pose.right.x, pose.right.y, pose.right.z),
+            side * (segment.profile.widthM * 0.5 - 0.12))
+          .addScaledVector(new THREE.Vector3(pose.up.x, pose.up.y, pose.up.z), 0.56);
+        barriers.push({
+          position,
+          rotation: barrierRotation.clone(),
+          scale: new THREE.Vector3(0.34, 1.12, 8.1),
+        });
+      }
+    }
+
+    if (segment.roadType !== 'elevated-highway') return;
+    // Bents sit outside the carriageway and are omitted at street crossings.
+    // A cross-head transfers deck loads to paired concrete piers.
+    for (let distance = 32; distance < segment.lengthM; distance += 48) {
+      const pose = this.graph.getCenterlinePose(segment.id, distance);
+      if (pose.position.x < bounds.minX || pose.position.x >= bounds.maxX
+        || pose.position.z < bounds.minZ || pose.position.z >= bounds.maxZ) continue;
+      const nearestStreet = Math.round(pose.position.x / CITY_BLOCK_SPACING_M) * CITY_BLOCK_SPACING_M;
+      if (Math.abs(pose.position.x - nearestStreet) < 23) continue;
+      const undersideY = pose.position.y - 1.2;
+      const pierHeight = Math.max(0, undersideY);
+      if (pierHeight < 1.5) continue;
+      for (const side of [-1, 1]) {
+        const base = new THREE.Vector3(pose.position.x, 0, pose.position.z)
+          .addScaledVector(new THREE.Vector3(pose.right.x, 0, pose.right.z),
+            side * (segment.profile.widthM * 0.5 + 1.8));
+        piers.push({
+          position: new THREE.Vector3(base.x, pierHeight * 0.5, base.z),
+          rotation: new THREE.Quaternion(),
+          scale: new THREE.Vector3(1.05, pierHeight, 1.05),
+        });
+      }
+      caps.push({
+        position: new THREE.Vector3(pose.position.x, undersideY - 0.42, pose.position.z),
+        rotation: new THREE.Quaternion(),
+        scale: new THREE.Vector3(1.9, 0.84, segment.profile.widthM + 4.4),
+      });
+    }
+  }
+
+  private addBridgeInstances(
+    group: THREE.Group,
+    centerX: number,
+    centerZ: number,
+    barriers: InstanceSpec[],
+    piers: InstanceSpec[],
+    caps: InstanceSpec[],
+  ): void {
+    const addInstances = (
+      specs: InstanceSpec[],
+      geometry: THREE.BufferGeometry,
+      material: THREE.Material,
+      name: string,
+    ): void => {
+      if (specs.length === 0) return;
+      const mesh = new THREE.InstancedMesh(geometry, material, specs.length);
+      const matrix = new THREE.Matrix4();
+      for (let i = 0; i < specs.length; i++) {
+        const spec = specs[i];
+        matrix.compose(
+          new THREE.Vector3(spec.position.x - centerX, spec.position.y, spec.position.z - centerZ),
+          spec.rotation,
+          spec.scale,
+        );
+        mesh.setMatrixAt(i, matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.name = name;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    };
+    addInstances(barriers, this.unitBox, this.bridgeBarrierMaterial, 'elevated-road-concrete-barriers');
+    addInstances(piers, this.bridgePierGeometry, this.bridgeConcreteMaterial, 'expressway-concrete-piers');
+    addInstances(caps, this.unitBox, this.bridgeConcreteMaterial, 'expressway-pier-cap-beams');
+  }
+
+  private addUnderpassShell(group: THREE.Group, centerX: number, centerZ: number): void {
+    const addBox = (name: string, x: number, y: number, z: number,
+      width: number, height: number, depth: number, material: THREE.Material): void => {
+      const mesh = new THREE.Mesh(this.unitBox, material);
+      mesh.name = name;
+      mesh.position.set(x - centerX, y, z - centerZ);
+      mesh.scale.set(width, height, depth);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    };
+    // A short concrete box underpass is aligned to the north/south street.
+    // The bridge soffit is the overhead clearance surface; this liner provides
+    // retaining walls, portal frames and low-intensity ceiling illumination.
+    addBox('underpass-ceiling-liner', 0, 5.72, 320, 20.4, 0.36, 80, this.underpassMaterial);
+    addBox('underpass-west-retaining-wall', -10.2, 2.9, 320, 0.65, 5.8, 80, this.bridgeConcreteMaterial);
+    addBox('underpass-east-retaining-wall', 10.2, 2.9, 320, 0.65, 5.8, 80, this.bridgeConcreteMaterial);
+    addBox('underpass-north-portal-header', 0, 5.35, 280, 20.4, 0.72, 0.8, this.bridgeConcreteMaterial);
+    addBox('underpass-south-portal-header', 0, 5.35, 360, 20.4, 0.72, 0.8, this.bridgeConcreteMaterial);
+    for (let i = 0; i < 5; i++) {
+      addBox('underpass-ceiling-luminaire-' + i, 0, 5.48, 292 + i * 14,
+        1.2, 0.08, 0.34, this.underpassLightMaterial);
+    }
+  }
+
+  private addUnderpassColliders(body: RAPIER.RigidBody, centerX: number, centerZ: number): void {
+    this.physics.createCollider(
+      RAPIER.ColliderDesc.cuboid(10.2, 0.18, 40)
+        .setTranslation(-centerX, 5.72, 320 - centerZ).setFriction(0.65),
+      body,
+    );
+    for (const side of [-1, 1]) {
+      this.physics.createCollider(
+        RAPIER.ColliderDesc.cuboid(0.325, 2.9, 40)
+          .setTranslation(side * 10.2 - centerX, 2.9, 320 - centerZ).setFriction(0.8),
+        body,
+      );
+    }
   }
 
   private addLineMarkings(
