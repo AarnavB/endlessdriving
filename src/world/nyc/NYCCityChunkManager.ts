@@ -450,7 +450,7 @@ export class NYCCityChunkManager {
       group.add(mesh);
     }
 
-    this.addStreetFurniture(group, centerX, centerZ, cx, cz);
+    this.addStreetFurniture(group, cx, cz);
 
     const body = this.physics.createRigidBody(RAPIER.RigidBodyDesc.fixed()
       .setTranslation(group.position.x, group.position.y, group.position.z)
@@ -598,7 +598,7 @@ export class NYCCityChunkManager {
     return result;
   }
 
-  private addStreetFurniture(group: THREE.Group, centerX: number, centerZ: number, cx: number, cz: number): void {
+  private addStreetFurniture(group: THREE.Group, cx: number, cz: number): void {
     const poles = new THREE.InstancedMesh(this.unitBox, this.poleMaterial, 8);
     const lamps = new THREE.InstancedMesh(this.lampGeometry, this.lampMaterial, 8);
     for (let i = 0; i < 8; i++) {
