@@ -408,7 +408,9 @@ export class Game {
       position.z + this.worldOffset.z,
     );
     const preferred = this.vehicle.getForward();
-    const lane = this.roadGraph.getNearestLanePose(globalPosition.x, globalPosition.z, preferred.x, preferred.z);
+    const lane = this.roadGraph.getNearestLanePose(
+      globalPosition.x, globalPosition.z, preferred.x, preferred.z, globalPosition.y,
+    );
     position.set(
       lane.position.x - this.worldOffset.x,
       lane.position.y + 0.72 - this.worldOffset.y,
