@@ -549,7 +549,7 @@ try {
           `${definition.name}: reconstructed rack command exceeded calibration at ${speedKmh} km/h (${reconstructedRackAngle.toFixed(4)} rad)`,
         );
         assert(
-          Math.abs((outsideRadius - insideRadius) - definition.visual.wheelTrack) < 0.02,
+          Math.abs((outsideRadius - insideRadius) - halfTrack * 2) < 0.02,
           `${definition.name}: Ackermann radii do not match the configured front track at ${speedKmh} km/h (inside=${insideRadius.toFixed(3)} m, outside=${outsideRadius.toFixed(3)} m)`,
         );
         samples.push({
