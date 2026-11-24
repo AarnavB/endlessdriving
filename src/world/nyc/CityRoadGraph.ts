@@ -611,6 +611,12 @@ export class CityRoadGraph {
   private ensureHighwaySegment(gridX: number): void {
     const fromNodeId = this.ensureHighwayNode(gridX);
     const toNodeId = this.ensureHighwayNode(gridX + 1);
+    const fromNode = this.getIntersection(fromNodeId);
+    const toNode = this.getIntersection(toNodeId);
+    // Levelled ramp endpoints may share the highway grid row, but are not
+    // deck nodes. Only connect two true elevated deck nodes with an
+    // expressway segment; designated ramp links own every level transition.
+    if (fromNode.kind !== "elevated" || toNode.kind !== "elevated") return;
     const existing = (this.customAdjacency.get(fromNodeId) ?? [])
       .some((edge) => edge.toNodeId === toNodeId);
     if (existing) return;
