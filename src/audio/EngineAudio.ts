@@ -16,6 +16,12 @@ export class EngineAudio {
   private highOsc: OscillatorNode | null = null;
   private subOsc: OscillatorNode | null = null;
   private engineFilter: BiquadFilterNode | null = null;
+  private harmonicGain: GainNode | null = null;
+  private subGain: GainNode | null = null;
+  private inductionOscillator: OscillatorNode | null = null;
+  private inductionFilter: BiquadFilterNode | null = null;
+  private inductionGain: GainNode | null = null;
+  private lastThrottle = 0;
   private windSource: AudioBufferSourceNode | null = null;
   private windFilter: BiquadFilterNode | null = null;
   private windGain: GainNode | null = null;
@@ -60,6 +66,8 @@ export class EngineAudio {
     highGain.gain.value = 0.13;
     const subGain = ctx.createGain();
     subGain.gain.value = 0.42;
+    this.harmonicGain = highGain;
+    this.subGain = subGain;
     this.lowOsc.connect(this.engineFilter);
     this.highOsc.connect(highGain);
     highGain.connect(this.engineFilter);
@@ -67,6 +75,21 @@ export class EngineAudio {
     subGain.connect(this.engineFilter);
     this.engineFilter.connect(this.engineGain);
     this.engineGain.connect(this.master);
+
+    // A quiet induction voice is present in the graph but remains silent on
+    // naturally aspirated vehicles. Its gain is driven only by configured
+    // forced-induction type, RPM and engine load.
+    this.inductionOscillator = ctx.createOscillator();
+    this.inductionOscillator.type = 'sine';
+    this.inductionFilter = ctx.createBiquadFilter();
+    this.inductionFilter.type = 'bandpass';
+    this.inductionFilter.frequency.value = 950;
+    this.inductionFilter.Q.value = 2.4;
+    this.inductionGain = ctx.createGain();
+    this.inductionGain.gain.value = 0;
+    this.inductionOscillator.connect(this.inductionFilter);
+    this.inductionFilter.connect(this.inductionGain);
+    this.inductionGain.connect(this.engineGain);
 
     const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const data = buffer.getChannelData(0);
@@ -93,6 +116,7 @@ export class EngineAudio {
     this.lowOsc.start();
     this.highOsc.start();
     this.subOsc.start();
+    this.inductionOscillator.start();
     this.windSource.start();
     this.started = true;
     await ctx.resume();
@@ -103,26 +127,83 @@ export class EngineAudio {
     throttle: number,
     speedMps: number,
     engineLoad: number,
-    _definition: VehicleDefinition,
+    definition: VehicleDefinition,
   ): void {
     const ctx = this.context;
     if (!ctx || !this.started || !this.lowOsc || !this.highOsc || !this.subOsc
       || !this.engineFilter || !this.engineGain || !this.windGain || !this.windFilter) return;
     const now = ctx.currentTime;
-    const normalizedRpm = Math.min(1, Math.max(0, (rpm - 700) / 6500));
-    const base = 16 + normalizedRpm * 94;
-    const load = Math.min(1, Math.max(0.12, 0.16 + throttle * 0.48 + engineLoad * 0.25 + normalizedRpm * 0.16));
+    const profile = definition.audio;
+    const normalizedRpm = Math.min(1, Math.max(0, rpm / definition.maxRpm));
+    const firingFrequency = Math.max(18, (rpm / 60) * (profile.cylinders / 2));
+    const load = Math.min(1, Math.max(0.12, 0.12 + throttle * 0.5 + engineLoad * 0.28 + normalizedRpm * 0.1));
     const shiftLevel = now < this.shiftCutUntil ? 0.42 : 1;
 
-    this.lowOsc.frequency.setTargetAtTime(base, now, 0.065);
-    this.highOsc.frequency.setTargetAtTime(base * 2.02, now, 0.065);
-    this.subOsc.frequency.setTargetAtTime(base * 0.49, now, 0.075);
-    this.engineFilter.frequency.setTargetAtTime(500 + normalizedRpm * 2450 + load * 180, now, 0.09);
-    this.engineGain.gain.setTargetAtTime(this.engineVolume * load * shiftLevel, now, 0.075);
+    // Four-stroke firing frequency gives each cylinder count a distinct base
+    // harmonic structure. Resonance, pulse width and saturation come from the
+    // selected vehicle rather than one generic RPM-to-pitch mapping.
+    this.lowOsc.frequency.setTargetAtTime(Math.max(16, firingFrequency * 0.5), now, 0.065);
+    this.highOsc.frequency.setTargetAtTime(firingFrequency, now, 0.065);
+    this.subOsc.frequency.setTargetAtTime(
+      Math.max(16, profile.exhaustResonanceHz * (0.22 + normalizedRpm * 0.18)), now, 0.075,
+    );
+    this.engineFilter.frequency.setTargetAtTime(
+      Math.min(profile.maxExhaustHz, profile.exhaustResonanceHz * 1.8 + normalizedRpm * profile.maxExhaustHz * 0.48),
+      now, 0.09,
+    );
+    this.engineFilter.Q.setTargetAtTime(0.62 + profile.saturation * 0.16, now, 0.09);
+    this.harmonicGain?.gain.setTargetAtTime(
+      Math.min(0.38, 0.045 + profile.pulseWidth * 0.82 + profile.saturation * 0.025), now, 0.08,
+    );
+    this.subGain?.gain.setTargetAtTime(0.18 + profile.exhaustBodyGain * 0.26, now, 0.08);
+    this.engineGain.gain.setTargetAtTime(
+      this.engineVolume * load * profile.exhaustBodyGain * shiftLevel * 0.82, now, 0.075,
+    );
 
-    // The original prototype's wind bed was low-passed and only opened with road speed.
+    const forcedInduction = profile.induction === 'twin-turbo' || profile.induction === 'supercharged';
+    const inductionLoad = forcedInduction
+      ? Math.min(1, Math.max(0, (throttle * 0.68 + engineLoad * 0.52) * (0.18 + normalizedRpm * 0.82)))
+      : 0;
+    if (this.inductionOscillator && this.inductionFilter && this.inductionGain) {
+      const pitch = 520 + normalizedRpm * 1750 + engineLoad * 480;
+      this.inductionOscillator.frequency.setTargetAtTime(pitch, now, 0.07);
+      this.inductionFilter.frequency.setTargetAtTime(850 + inductionLoad * 2600, now, 0.08);
+      const voiceGain = profile.induction === 'supercharged' ? 0.12 : 0.085;
+      this.inductionGain.gain.setTargetAtTime(this.engineVolume * voiceGain * inductionLoad, now, 0.1);
+    }
+    if (profile.induction === 'twin-turbo' && this.lastThrottle > 0.72 && throttle < 0.12) {
+      this.playWastegateTransient(ctx, now);
+    }
+    this.lastThrottle = throttle;
+
+    // The filtered wind bed remains speed-sensitive and independent of the engine.
     this.windFilter.frequency.setTargetAtTime(150 + Math.min(1, speedMps / 48) * 920, now, 0.12);
     this.windGain.gain.setTargetAtTime(Math.min(0.15, speedMps / 70 * 0.15), now, 0.15);
+  }
+
+  private playWastegateTransient(ctx: AudioContext, now: number): void {
+    const oscillator = ctx.createOscillator();
+    const filter = ctx.createBiquadFilter();
+    const envelope = ctx.createGain();
+    oscillator.type = 'sawtooth';
+    oscillator.frequency.setValueAtTime(1180, now);
+    oscillator.frequency.exponentialRampToValueAtTime(430, now + 0.11);
+    filter.type = 'bandpass';
+    filter.frequency.value = 1850;
+    filter.Q.value = 1.5;
+    envelope.gain.setValueAtTime(0.0001, now);
+    envelope.gain.exponentialRampToValueAtTime(this.engineVolume * 0.065, now + 0.012);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+    oscillator.connect(filter);
+    filter.connect(envelope);
+    envelope.connect(this.engineGain!);
+    oscillator.start(now);
+    oscillator.stop(now + 0.15);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      filter.disconnect();
+      envelope.disconnect();
+    };
   }
 
   playShiftEvent(event: VehicleShiftEvent): void {
@@ -182,14 +263,20 @@ export class EngineAudio {
     try { this.lowOsc?.stop(); } catch { /* already stopped */ }
     try { this.highOsc?.stop(); } catch { /* already stopped */ }
     try { this.subOsc?.stop(); } catch { /* already stopped */ }
+    try { this.inductionOscillator?.stop(); } catch { /* already stopped */ }
     try { this.windSource?.stop(); } catch { /* already stopped */ }
     this.lowOsc?.disconnect();
     this.highOsc?.disconnect();
     this.subOsc?.disconnect();
+    this.inductionOscillator?.disconnect();
+    this.inductionFilter?.disconnect();
+    this.inductionGain?.disconnect();
     this.windSource?.disconnect();
     this.windFilter?.disconnect();
     this.windGain?.disconnect();
     this.engineFilter?.disconnect();
+    this.harmonicGain?.disconnect();
+    this.subGain?.disconnect();
     this.engineGain?.disconnect();
     this.ambientGain?.disconnect();
     this.effectsGain?.disconnect();
@@ -197,5 +284,6 @@ export class EngineAudio {
     void this.context?.close();
     this.context = null;
     this.started = false;
+    this.lastThrottle = 0;
   }
 }
