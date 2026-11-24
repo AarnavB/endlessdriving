@@ -9,9 +9,11 @@
     "preview": "vite preview --host 0.0.0.0",
     "test:drivetrain": "node tests/drivetrain-regression.mjs",
     "test:nyc-geo": "node tests/nyc-geo-regression.mjs",
-    "test:world": "npm run test:nyc-geo && npm run test:city-urban && npm run test:city-routing",
+    "test:world": "npm run test:nyc-geo && npm run test:city-urban && npm run test:city-routing && npm run test:nyc-road-data",
     "test:city-routing": "node tests/city-routing-regression.mjs",
-    "test:city-urban": "node tests/city-urban-regression.mjs"
+    "test:city-urban": "node tests/city-urban-regression.mjs",
+    "bake:nyc:roads": "node scripts/bake-nyc-world-data.mjs",
+    "test:nyc-road-data": "node tests/nyc-road-data-bake-regression.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
