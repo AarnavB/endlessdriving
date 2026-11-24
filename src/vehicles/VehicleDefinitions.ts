@@ -39,7 +39,7 @@ export interface VehiclePhysicsProfile {
 
 export interface VehicleAudioProfile {
   cylinders: 8 | 10 | 12;
-  induction: 'naturally-aspirated' | 'twin-turbo' | 'hybrid';
+  induction: 'naturally-aspirated' | 'twin-turbo' | 'supercharged' | 'hybrid';
   /** Combustion pulse width within one firing interval. */
   pulseWidth: number;
   /** Dominant low exhaust resonance, in Hz. */
