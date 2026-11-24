@@ -6,6 +6,15 @@ import {
   CityRoadGraph,
 } from './CityRoadGraph';
 import type { CityRoadSegment } from './CityRoadGraph';
+import {
+  CitySpatialIndex,
+  citySpatialHash,
+  createCityParcelLayout,
+  getCityDistrictProfile,
+  isAabbClearOfRoadNetwork,
+  isCityParkBlock,
+} from './CityUrbanModel';
+import type { CityBounds2D } from './CityUrbanModel';
 
 interface CityChunk {
   key: string;
@@ -13,9 +22,13 @@ interface CityChunk {
   body: RAPIER.RigidBody;
   geometries: THREE.BufferGeometry[];
   buildings: number;
+  buildingColliders: number;
   roads: number;
+  environmentObjects: number;
+  nightLights: THREE.PointLight[];
 }
 interface BuildingSpec {
+  id: string;
   x: number;
   z: number;
   width: number;
@@ -240,6 +253,12 @@ export class NYCCityChunkManager {
     color: 0xffe0a8, emissive: 0xffbd70, emissiveIntensity: 0.25,
   });
   private readonly treeMaterial = new THREE.MeshStandardMaterial({ color: 0x42644f, roughness: 1 });
+  private readonly treeTrunkMaterial = new THREE.MeshStandardMaterial({
+    color: 0x554438, roughness: 0.98, metalness: 0,
+  });
+  private readonly parkMaterial = new THREE.MeshStandardMaterial({
+    color: 0x465b43, roughness: 1, metalness: 0,
+  });
   private readonly bridgeConcreteMaterial = new THREE.MeshStandardMaterial({
     color: 0x777d80, roughness: 0.91, metalness: 0.03,
   });
@@ -310,6 +329,12 @@ export class NYCCityChunkManager {
     this.buildingMaterial.emissiveIntensity = blend * 0.07;
     this.windowMaterial.emissiveIntensity = THREE.MathUtils.lerp(0.08, 0.55, blend);
     this.lampMaterial.emissiveIntensity = THREE.MathUtils.lerp(0.2, 2.0, blend);
+    for (const chunk of this.chunks.values()) {
+      for (const light of chunk.nightLights) {
+        light.intensity = 22 * blend;
+        light.visible = blend > 0.025;
+      }
+    }
   }
 
   /** Kept as a stable surface-sampling hook for reset/diagnostic callers. */
@@ -321,14 +346,32 @@ export class NYCCityChunkManager {
     };
   }
 
-  getDiagnostics(): { activeChunks: number; pendingChunks: number; buildings: number; roadLines: number } {
+  getDiagnostics(): {
+    activeChunks: number;
+    pendingChunks: number;
+    buildings: number;
+    buildingColliders: number;
+    roadLines: number;
+    environmentObjects: number;
+  } {
     let buildings = 0;
+    let buildingColliders = 0;
     let roadLines = 0;
+    let environmentObjects = 0;
     for (const chunk of this.chunks.values()) {
       buildings += chunk.buildings;
+      buildingColliders += chunk.buildingColliders;
       roadLines += chunk.roads;
+      environmentObjects += chunk.environmentObjects;
     }
-    return { activeChunks: this.chunks.size, pendingChunks: this.pending.size, buildings, roadLines };
+    return {
+      activeChunks: this.chunks.size,
+      pendingChunks: this.pending.size,
+      buildings,
+      buildingColliders,
+      roadLines,
+      environmentObjects,
+    };
   }
 
   dispose(): void {
@@ -342,7 +385,7 @@ export class NYCCityChunkManager {
       this.groundMaterial, this.roadMaterial, this.sidewalkMaterial, this.lineMaterial, this.centreLineMaterial,
       this.curbMaterial, this.buildingMaterial, this.storefrontMaterial, this.storefrontFrameMaterial,
       this.retailSignMaterial, this.windowMaterial, this.rooftopMaterial,
-      this.poleMaterial, this.lampMaterial, this.treeMaterial,
+      this.poleMaterial, this.lampMaterial, this.treeMaterial, this.treeTrunkMaterial, this.parkMaterial,
       this.bridgeConcreteMaterial, this.bridgeUndersideMaterial, this.bridgeBarrierMaterial,
       this.underpassMaterial, this.underpassLightMaterial,
     ]) material.dispose();
@@ -658,6 +701,24 @@ export class NYCCityChunkManager {
     }
 
     const buildingSpecs = this.collectBuildings(minX, maxX, minZ, maxZ);
+    // Neighbour footprints are indexed as well, so a prop generated at a chunk
+    // edge cannot overlap a building owned by the adjacent streamed chunk.
+    const nearbyBuildings = this.collectBuildings(minX - 64, maxX + 64, minZ - 64, maxZ + 64);
+    const propPlacementIndex = new CitySpatialIndex<string>(24);
+    for (const building of nearbyBuildings) {
+      propPlacementIndex.insert(
+        'building:' + building.id,
+        {
+          minX: building.x - building.width * 0.5,
+          maxX: building.x + building.width * 0.5,
+          minZ: building.z - building.depth * 0.5,
+          maxZ: building.z + building.depth * 0.5,
+        },
+        'building',
+      );
+    }
+    const streetColliderSpecs: InstanceSpec[] = [];
+    const nightLights: THREE.PointLight[] = [];
     const buildingMesh = new THREE.InstancedMesh(this.unitBox, this.buildingMaterial, buildingSpecs.length);
     const windows: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
     const storefronts: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
@@ -788,7 +849,10 @@ export class NYCCityChunkManager {
       group.add(mesh);
     }
 
-    this.addStreetFurniture(group, cx, cz);
+    this.addStreetFurniture(
+      group, cx, cz, centerX, centerZ, chunkBounds,
+      propPlacementIndex, streetColliderSpecs, nightLights,
+    );
     this.addBridgeInstances(group, centerX, centerZ, barrierSpecs, pierSpecs, capSpecs);
     const hasUnderpassShell = minX <= 0 && maxX > 0 && minZ <= 320 && maxZ > 320;
     if (hasUnderpassShell) this.addUnderpassShell(group, centerX, centerZ);
@@ -848,6 +912,21 @@ export class NYCCityChunkManager {
       );
     }
     if (hasUnderpassShell) this.addUnderpassColliders(body, centerX, centerZ);
+    // Poles and tree trunks use the exact validated instance transforms; their
+    // simplified static colliders therefore cannot drift from the visible props.
+    for (const prop of streetColliderSpecs) {
+      this.physics.createCollider(
+        RAPIER.ColliderDesc.cuboid(
+          prop.scale.x * 0.5, prop.scale.y * 0.5, prop.scale.z * 0.5,
+        )
+          .setTranslation(
+            prop.position.x - centerX, prop.position.y, prop.position.z - centerZ,
+          )
+          .setFriction(0.72)
+          .setRestitution(0),
+        body,
+      );
+    }
     if (curbs.length > 0) {
       for (const curb of curbs) {
         const halfLength = curb.length * 0.5;
@@ -858,6 +937,7 @@ export class NYCCityChunkManager {
         this.physics.createCollider(descriptor, body);
       }
     }
+    let buildingColliders = 0;
     for (const b of buildingSpecs) {
       this.physics.createCollider(
         RAPIER.ColliderDesc.cuboid(b.width * 0.5, b.height * 0.5, b.depth * 0.5)
@@ -865,6 +945,10 @@ export class NYCCityChunkManager {
           .setFriction(0.78).setRestitution(0),
         body,
       );
+      buildingColliders++;
+    }
+    if (buildingColliders !== buildingSpecs.length) {
+      throw new Error('Building collision coverage mismatch in chunk ' + key);
     }
 
     buildingMesh.instanceMatrix.needsUpdate = true;
@@ -872,7 +956,17 @@ export class NYCCityChunkManager {
       if (object instanceof THREE.InstancedMesh) object.instanceMatrix.needsUpdate = true;
     });
 
-    return { key, group, body, geometries, buildings: buildingSpecs.length, roads: roadLines.size };
+    return {
+      key,
+      group,
+      body,
+      geometries,
+      buildings: buildingSpecs.length,
+      buildingColliders,
+      roads: roadLines.size,
+      environmentObjects: streetColliderSpecs.length,
+      nightLights,
+    };
   }
 
   private addTrimeshCollider(body: RAPIER.RigidBody, geometry: THREE.BufferGeometry, friction: number): void {
@@ -1157,7 +1251,7 @@ export class NYCCityChunkManager {
       || segment.roadType === 'entrance-ramp' || segment.roadType === 'exit-ramp')
       .map((segment) => {
         const points = [segment.start, segment.end, ...(segment.controlPoints ?? [])];
-        const margin = segment.profile.widthM * 0.5 + 1;
+        const margin = segment.profile.widthM * 0.5 + 1.5;
         return {
           minX: Math.min(...points.map((point) => point.x)) - margin,
           maxX: Math.max(...points.map((point) => point.x)) + margin,
@@ -1167,99 +1261,254 @@ export class NYCCityChunkManager {
           maxY: Math.max(...points.map((point) => point.y)),
         };
       });
+    const footprints = new CitySpatialIndex<string>(32);
 
-    // Keep parcels on a deterministic 2x2 block plan. The building fronts
-    // face the surrounding streets, while the centre gap leaves service and
-    // light-well space instead of a field of isolated random boxes.
     for (let gx = firstGX; gx < lastGX; gx++) {
       for (let gz = firstGZ; gz < lastGZ; gz++) {
         const centreX = (gx + 0.5) * CITY_BLOCK_SPACING_M;
         const centreZ = (gz + 0.5) * CITY_BLOCK_SPACING_M;
         if (centreX < minX || centreX >= maxX || centreZ < minZ || centreZ >= maxZ) continue;
-        const blockHash = hash(gx, gz, this.graph.seed);
-        const blockRadius = Math.hypot(gx, gz);
-        const industrial = blockRadius > 16 && blockHash % 7 === 0;
-        const district = blockRadius <= 4 ? 'core'
-          : blockRadius <= 10 ? 'commercial'
-            : blockRadius <= 20 ? 'residential'
-              : industrial ? 'industrial' : 'outer';
 
-        for (let i = 0; i < 4; i++) {
-          const value = hash(gx * 7 + i, gz * 11 - i, this.graph.seed ^ 0x51f2);
-          const offsetX = i % 2 === 0 ? -32 : 32;
-          const offsetZ = i < 2 ? -32 : 32;
-          const width = 46 + (value % 900) / 100;
-          const depth = 45 + ((value >>> 8) % 1000) / 100;
-          const style = (value >>> 18) % 6;
-          const variation = ((value >>> 23) % 1000) / 100;
+        const district = getCityDistrictProfile(centreX, centreZ);
+        if (isCityParkBlock(this.graph.seed, gx, gz, district)) continue;
 
-          let height: number;
-          if (district === 'core') {
-            height = style === 0 ? 118 + variation * 6.4
-              : style === 1 ? 78 + variation * 4.1
-                : style === 2 ? 48 + variation * 3.2
-                  : 22 + variation * 3.4;
-          } else if (district === 'commercial') {
-            height = style === 0 ? 74 + variation * 4.1
-              : style === 1 ? 42 + variation * 3.4
-                : 20 + variation * 3.1;
-          } else if (district === 'residential') {
-            height = style === 0 ? 38 + variation * 2.6
-              : style === 1 ? 21 + variation * 2.1
-                : 11 + variation * 1.7;
-          } else if (district === 'industrial') {
-            height = 8 + variation * 1.5;
-          } else {
-            height = style === 0 ? 45 + variation * 2.8
-              : 14 + variation * 2.9;
-          }
+        // Reserve the road, curb and sidewalk envelope on all four block edges.
+        const xRoadHalf = Math.max(
+          this.graph.getRoadProfile('z', gx).widthM,
+          this.graph.getRoadProfile('z', gx + 1).widthM,
+        ) * 0.5;
+        const zRoadHalf = Math.max(
+          this.graph.getRoadProfile('x', gz).widthM,
+          this.graph.getRoadProfile('x', gz + 1).widthM,
+        ) * 0.5;
+        const halfWidth = 80 - xRoadHalf - SIDEWALK_WIDTH_M - 4;
+        const halfDepth = 80 - zRoadHalf - SIDEWALK_WIDTH_M - 4;
+        const parcels = createCityParcelLayout(
+          this.graph.seed, gx, gz, halfWidth, halfDepth, district,
+        );
 
-          const buildingX = centreX + offsetX;
-          const buildingZ = centreZ + offsetZ;
-          const buildingHeight = Math.min(190, height);
+        for (const parcel of parcels) {
+          const value = citySpatialHash(gx * 7 + Number(parcel.id.split(':').at(-1)), gz * 11, this.graph.seed ^ 0x51f2);
+          const style = value % district.palette.length;
+          const shape = 0.78 + parcel.variation * 0.22;
+          const height = district.minimumHeightM
+            + Math.pow(parcel.variation, district.kind === 'financial' || district.kind === 'midtown' ? 0.72 : 1.18)
+            * (district.maximumHeightM - district.minimumHeightM);
+          const buildingX = centreX + parcel.offsetX;
+          const buildingZ = centreZ + parcel.offsetZ;
+          const width = parcel.width * shape;
+          const depth = parcel.depth * shape;
+          const buildingHeight = Math.min(220, height);
+          const footprint: CityBounds2D = {
+            minX: buildingX - width * 0.5,
+            maxX: buildingX + width * 0.5,
+            minZ: buildingZ - depth * 0.5,
+            maxZ: buildingZ + depth * 0.5,
+          };
           const intersectsElevatedRightOfWay = rightOfWaySegments.some((road) =>
             road.maxY > 0.25 && road.minY < buildingHeight + 0.5
-            && road.maxX >= buildingX - width * 0.5
-            && road.minX <= buildingX + width * 0.5
-            && road.maxZ >= buildingZ - depth * 0.5
-            && road.minZ <= buildingZ + depth * 0.5);
-          // Do not procedural-spawn buildings through elevated decks or the
-          // swept footprint of their ramps. The bounds are conservative so
-          // chunk edges cannot expose a building clipping into a road ribbon.
-          if (!intersectsElevatedRightOfWay) {
-            result.push({
-              x: buildingX,
-              z: buildingZ,
-              width,
-              depth,
-              height: buildingHeight,
-              baseY: this.sampleTerrainHeight(buildingX, buildingZ),
-              colour: colourForBuilding(style),
-            });
-          }
+            && road.maxX >= footprint.minX && road.minX <= footprint.maxX
+            && road.maxZ >= footprint.minZ && road.minZ <= footprint.maxZ);
+          if (intersectsElevatedRightOfWay
+            || !isAabbClearOfRoadNetwork(footprint, this.graph, 0.75)
+            || footprints.query(footprint).length > 0) continue;
+
+          const id = parcel.id;
+          footprints.insert(id, footprint, 'building');
+          result.push({
+            id,
+            x: buildingX,
+            z: buildingZ,
+            width,
+            depth,
+            height: buildingHeight,
+            baseY: this.sampleTerrainHeight(buildingX, buildingZ),
+            colour: new THREE.Color(district.palette[style]),
+          });
         }
       }
     }
     return result;
   }
 
-  private addStreetFurniture(group: THREE.Group, cx: number, cz: number): void {
-    const poles = new THREE.InstancedMesh(this.unitBox, this.poleMaterial, 8);
-    const lamps = new THREE.InstancedMesh(this.lampGeometry, this.lampMaterial, 8);
-    for (let i = 0; i < 8; i++) {
-      const x = (i % 2 === 0 ? -1 : 1) * (CITY_CHUNK_SIZE_M * 0.5 - 22);
-      const z = (Math.floor(i / 2) - 1.5) * 104;
-      setInstance(poles, i, x, 3.1, z, 0.15, 6.2, 0.15);
-      setInstance(lamps, i, x, 6.25, z, 0.42, 0.24, 0.42);
+  private addStreetFurniture(
+    group: THREE.Group,
+    cx: number,
+    cz: number,
+    centerX: number,
+    centerZ: number,
+    chunkBounds: RibbonBounds,
+    placementIndex: CitySpatialIndex<string>,
+    colliderSpecs: InstanceSpec[],
+    nightLights: THREE.PointLight[],
+  ): void {
+    const poleSpecs: InstanceSpec[] = [];
+    const parkSpecs: Array<{ x: number; z: number; width: number; depth: number; y: number }> = [];
+    const treeSpecs: Array<{ x: number; z: number; y: number; scale: number }> = [];
+
+    const reserve = (id: string, x: number, z: number, radius: number, kind: string): CityBounds2D | null => {
+      const bounds: CityBounds2D = {
+        minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius,
+      };
+      if (!isAabbClearOfRoadNetwork(bounds, this.graph, 0.15)) return null;
+      if (placementIndex.query(bounds).length > 0) return null;
+      placementIndex.insert(id, bounds, kind);
+      return bounds;
+    };
+
+    // Streetlights are anchored to graph road edges and mid-block stations.
+    // Their bases sit within the sidewalk envelope, never at arbitrary chunk offsets.
+    const firstGridX = Math.floor(chunkBounds.minX / CITY_BLOCK_SPACING_M) - 1;
+    const lastGridX = Math.ceil(chunkBounds.maxX / CITY_BLOCK_SPACING_M) + 1;
+    const firstGridZ = Math.floor(chunkBounds.minZ / CITY_BLOCK_SPACING_M) - 1;
+    const lastGridZ = Math.ceil(chunkBounds.maxZ / CITY_BLOCK_SPACING_M) + 1;
+    for (let gx = firstGridX; gx <= lastGridX; gx++) {
+      const roadX = gx * CITY_BLOCK_SPACING_M;
+      const profile = this.graph.getRoadProfile('z', gx);
+      for (let gz = firstGridZ; gz < lastGridZ; gz++) {
+        const alongZ = (gz + 0.5) * CITY_BLOCK_SPACING_M;
+        const side = (citySpatialHash(gx, gz, this.graph.seed ^ 0x6a71) & 1) === 0 ? -1 : 1;
+        const x = roadX + side * (profile.widthM * 0.5 + SIDEWALK_WIDTH_M * 0.56);
+        if (x < chunkBounds.minX || x >= chunkBounds.maxX
+          || alongZ < chunkBounds.minZ || alongZ >= chunkBounds.maxZ) continue;
+        if (!reserve('lamp:x:' + gx + ':' + gz, x, alongZ, 0.42, 'streetlight')) continue;
+        poleSpecs.push({
+          position: new THREE.Vector3(x, 3.1, alongZ),
+          rotation: new THREE.Quaternion(),
+          scale: new THREE.Vector3(0.15, 6.2, 0.15),
+        });
+        if ((citySpatialHash(gx, gz, this.graph.seed ^ 0x31a) % 4) === 0) {
+          const light = new THREE.PointLight(0xffd2a0, 0, 30, 2);
+          light.name = 'streetlight-point-source';
+          light.position.set(x - centerX, 5.85, alongZ - centerZ);
+          light.visible = false;
+          group.add(light);
+          nightLights.push(light);
+        }
+      }
     }
-    group.add(poles, lamps);
-    const trees = new THREE.InstancedMesh(this.treeGeometry, this.treeMaterial, 10);
-    for (let i = 0; i < 10; i++) {
-      const x = (hash(cx * 10 + i, cz, this.graph.seed) % 380) - 190;
-      const z = (hash(cx, cz * 10 + i, this.graph.seed) % 380) - 190;
-      setInstance(trees, i, x, this.sampleTerrainHeight(cx + x, cz + z) + 3, z, 2.7, 3.2, 2.7);
+    for (let gz = firstGridZ; gz <= lastGridZ; gz++) {
+      const roadZ = gz * CITY_BLOCK_SPACING_M;
+      const profile = this.graph.getRoadProfile('x', gz);
+      for (let gx = firstGridX; gx < lastGridX; gx++) {
+        const alongX = (gx + 0.5) * CITY_BLOCK_SPACING_M;
+        const side = (citySpatialHash(gx, gz, this.graph.seed ^ 0x7b91) & 1) === 0 ? -1 : 1;
+        const z = roadZ + side * (profile.widthM * 0.5 + SIDEWALK_WIDTH_M * 0.56);
+        if (alongX < chunkBounds.minX || alongX >= chunkBounds.maxX
+          || z < chunkBounds.minZ || z >= chunkBounds.maxZ) continue;
+        if (!reserve('lamp:z:' + gx + ':' + gz, alongX, z, 0.42, 'streetlight')) continue;
+        poleSpecs.push({
+          position: new THREE.Vector3(alongX, 3.1, z),
+          rotation: new THREE.Quaternion(),
+          scale: new THREE.Vector3(0.15, 6.2, 0.15),
+        });
+        if ((citySpatialHash(gx, gz, this.graph.seed ^ 0x31a) % 4) === 0) {
+          const light = new THREE.PointLight(0xffd2a0, 0, 30, 2);
+          light.name = 'streetlight-point-source';
+          light.position.set(alongX - centerX, 5.85, z - centerZ);
+          light.visible = false;
+          group.add(light);
+          nightLights.push(light);
+        }
+      }
     }
-    group.add(trees);
+
+    if (poleSpecs.length > 0) {
+      const poles = new THREE.InstancedMesh(this.unitBox, this.poleMaterial, poleSpecs.length);
+      const lamps = new THREE.InstancedMesh(this.lampGeometry, this.lampMaterial, poleSpecs.length);
+      for (let i = 0; i < poleSpecs.length; i++) {
+        const pole = poleSpecs[i];
+        setInstance(poles, i,
+          pole.position.x - centerX, pole.position.y, pole.position.z - centerZ,
+          pole.scale.x, pole.scale.y, pole.scale.z);
+        setInstance(lamps, i,
+          pole.position.x - centerX, 6.25, pole.position.z - centerZ,
+          0.42, 0.24, 0.42);
+        colliderSpecs.push(pole);
+      }
+      poles.name = 'graph-aligned-streetlight-poles';
+      lamps.name = 'graph-aligned-streetlight-emissive-lamps';
+      poles.castShadow = true;
+      group.add(poles, lamps);
+    }
+
+    // Park blocks are open parcels selected by stable district rules. Trees are
+    // confined to those reserved green-space footprints, with trunk colliders.
+    const parkGeometry = new THREE.InstancedMesh(this.unitBox, this.parkMaterial, Math.max(1, (lastGridX - firstGridX + 1) * (lastGridZ - firstGridZ + 1)));
+    const treeMesh = new THREE.InstancedMesh(this.treeGeometry, this.treeMaterial, Math.max(1, (lastGridX - firstGridX + 1) * (lastGridZ - firstGridZ + 1) * 3));
+    const trunks = new THREE.InstancedMesh(this.unitBox, this.treeTrunkMaterial, treeMesh.count);
+    let parkCount = 0;
+    let treeCount = 0;
+    for (let gx = firstGridX; gx < lastGridX; gx++) {
+      const blockCentreX = (gx + 0.5) * CITY_BLOCK_SPACING_M;
+      for (let gz = firstGridZ; gz < lastGridZ; gz++) {
+        const blockCentreZ = (gz + 0.5) * CITY_BLOCK_SPACING_M;
+        if (blockCentreX < chunkBounds.minX || blockCentreX >= chunkBounds.maxX
+          || blockCentreZ < chunkBounds.minZ || blockCentreZ >= chunkBounds.maxZ) continue;
+        const district = getCityDistrictProfile(blockCentreX, blockCentreZ);
+        if (!isCityParkBlock(this.graph.seed, gx, gz, district)) continue;
+        const halfX = 80
+          - Math.max(this.graph.getRoadProfile('z', gx).widthM, this.graph.getRoadProfile('z', gx + 1).widthM) * 0.5
+          - SIDEWALK_WIDTH_M - 4;
+        const halfZ = 80
+          - Math.max(this.graph.getRoadProfile('x', gz).widthM, this.graph.getRoadProfile('x', gz + 1).widthM) * 0.5
+          - SIDEWALK_WIDTH_M - 4;
+        if (halfX < 12 || halfZ < 12) continue;
+        const parkBounds: CityBounds2D = {
+          minX: blockCentreX - halfX, maxX: blockCentreX + halfX,
+          minZ: blockCentreZ - halfZ, maxZ: blockCentreZ + halfZ,
+        };
+        if (!isAabbClearOfRoadNetwork(parkBounds, this.graph, 1)) continue;
+        parkSpecs.push({
+          x: blockCentreX - centerX,
+          z: blockCentreZ - centerZ,
+          width: halfX * 2,
+          depth: halfZ * 2,
+          y: this.sampleTerrainHeight(blockCentreX, blockCentreZ) + 0.025,
+        });
+        for (let tree = 0; tree < 3; tree++) {
+          const value = citySpatialHash(gx * 17 + tree, gz * 23 - tree, this.graph.seed ^ 0x8c31);
+          const x = blockCentreX + ((value & 0xff) / 255 - 0.5) * halfX * 1.15;
+          const z = blockCentreZ + (((value >>> 8) & 0xff) / 255 - 0.5) * halfZ * 1.15;
+          const radius = 0.55;
+          if (!reserve('tree:' + gx + ':' + gz + ':' + tree, x, z, radius, 'tree')) continue;
+          const y = this.sampleTerrainHeight(x, z);
+          const scale = 0.82 + ((value >>> 16) & 0xff) / 255 * 0.45;
+          treeSpecs.push({ x: x - centerX, z: z - centerZ, y, scale });
+          colliderSpecs.push({
+            position: new THREE.Vector3(x, y + 1.35 * scale, z),
+            rotation: new THREE.Quaternion(),
+            scale: new THREE.Vector3(0.34 * scale, 2.7 * scale, 0.34 * scale),
+          });
+        }
+      }
+    }
+    if (parkSpecs.length > 0) {
+      const parks = new THREE.InstancedMesh(this.unitBox, this.parkMaterial, parkSpecs.length);
+      for (let i = 0; i < parkSpecs.length; i++) {
+        const park = parkSpecs[i];
+        setInstance(parks, i, park.x, park.y, park.z, park.width, 0.05, park.depth);
+      }
+      parks.name = 'district-park-green-space';
+      parks.receiveShadow = true;
+      group.add(parks);
+    }
+    if (treeSpecs.length > 0) {
+      const trees = new THREE.InstancedMesh(this.treeGeometry, this.treeMaterial, treeSpecs.length);
+      const treeTrunks = new THREE.InstancedMesh(this.unitBox, this.treeTrunkMaterial, treeSpecs.length);
+      for (let i = 0; i < treeSpecs.length; i++) {
+        const tree = treeSpecs[i];
+        setInstance(trees, i, tree.x, tree.y + 3.05 * tree.scale, tree.z,
+          2.65 * tree.scale, 3.2 * tree.scale, 2.65 * tree.scale);
+        setInstance(treeTrunks, i, tree.x, tree.y + 1.35 * tree.scale, tree.z,
+          0.34 * tree.scale, 2.7 * tree.scale, 0.34 * tree.scale);
+      }
+      trees.name = 'park-tree-foliage';
+      treeTrunks.name = 'park-tree-trunks';
+      trees.castShadow = true;
+      treeTrunks.castShadow = true;
+      group.add(trees, treeTrunks);
+    }
   }
 
   private removeChunk(chunk: CityChunk): void {
