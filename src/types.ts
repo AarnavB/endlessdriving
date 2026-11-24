@@ -16,6 +16,10 @@ export interface InputState {
   brake: number;
   steer: number;
   handbrake: boolean;
+  /** Edge-triggered N key request to select neutral from any transmission state. */
+  neutralPressed?: boolean;
+  /** 0 = fully engaged clutch, 1 = pedal fully depressed. */
+  clutchPedal?: number;
   shiftUpPressed: boolean;
   shiftDownPressed: boolean;
 }
@@ -26,6 +30,7 @@ export interface VehicleTelemetry {
   rpm: number;
   gear: number;
   gearLabel: string;
+  handbrakeActive: boolean;
   transmissionMode: 'AUTO' | 'MANUAL';
   throttle: number;
   steer: number;
