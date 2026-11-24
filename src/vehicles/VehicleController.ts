@@ -90,7 +90,9 @@ export class VehicleController {
       .setLinearDamping(0.018)
       .setAngularDamping(0.75)
       .setCanSleep(false)
-      .enabledRotations(false, true, false);
+      // Permit pitch so the four suspension rays can follow ramp grades;
+      // roll remains locked to preserve the existing stable road handling.
+      .enabledRotations(true, true, false);
     this.body = world.createRigidBody(bodyDesc);
     const collider = RAPIER.ColliderDesc.cuboid(definition.visual.bodyWidth * 0.48, 0.34, definition.visual.bodyLength * 0.46)
       .setMass(definition.physics.massKg)
@@ -578,10 +580,23 @@ export class VehicleController {
     this.body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-    const heading = roadHeading.clone().setY(0).normalize();
+    const heading = roadHeading.clone().normalize();
+    const horizontalLength = Math.hypot(heading.x, heading.z) || 1;
     const yaw = Math.atan2(heading.x, heading.z);
+    const pitch = Math.atan2(heading.y, horizontalLength);
+    const halfYaw = yaw * 0.5;
+    const halfPitch = -pitch * 0.5;
+    const sinYaw = Math.sin(halfYaw);
+    const cosYaw = Math.cos(halfYaw);
+    const sinPitch = Math.sin(halfPitch);
+    const cosPitch = Math.cos(halfPitch);
+    // Compose yaw with local-X pitch so a road tangent with a vertical
+    // component gives the chassis the correct uphill/downhill orientation.
     this.body.setRotation({
-      x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2),
+      x: cosYaw * sinPitch,
+      y: sinYaw * cosPitch,
+      z: -sinYaw * sinPitch,
+      w: cosYaw * cosPitch,
     }, true);
     if (resetDistance) this.tripDistanceKm = 0;
     this.lastDistanceX = position.x;
