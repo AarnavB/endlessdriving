@@ -88,6 +88,8 @@ try {
     let maxGear = 1;
     let previousGear = 1;
     let gearTransitions = 0;
+    let firstShiftSeconds = null;
+    let zeroTo100Seconds = null;
     let upshiftNextTick = false;
     const milestones = new Set();
     const maxRpm = definition.maxRpm;
@@ -118,7 +120,11 @@ try {
 
         if (telemetry.gear !== previousGear) {
           gearTransitions++;
+          if (firstShiftSeconds === null) firstShiftSeconds = step * dt;
           previousGear = telemetry.gear;
+        }
+        if (zeroTo100Seconds === null && telemetry.speedKmh >= 100) {
+          zeroTo100Seconds = step * dt;
         }
 
         for (const threshold of [50, 60, 80, 100, 150]) {
@@ -179,6 +185,8 @@ try {
         minimumSignedSpeedMps: Number(minSignedSpeed.toFixed(3)),
         highestGear: maxGear,
         gearTransitions,
+        firstShiftSeconds: firstShiftSeconds === null ? null : Number(firstShiftSeconds.toFixed(2)),
+        zeroTo100Seconds: zeroTo100Seconds === null ? null : Number(zeroTo100Seconds.toFixed(2)),
         speedMilestonesKmh: [...milestones].sort((a, b) => a - b),
         result: 'PASS',
       };
