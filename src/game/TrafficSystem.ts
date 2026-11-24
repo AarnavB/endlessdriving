@@ -20,8 +20,7 @@ interface TrafficVehicle {
   waitingAt: string | null;
   stoppedSeconds: number;
   turnCount: number;
-  transitionFrom: { x: number; y: number; z: number } | null;
-  transitionYaw: number;
+  transitionFrom: CityLanePose | null;
 }
 
 interface TrafficSignalLamps {
@@ -447,7 +446,7 @@ export class TrafficSystem {
       body, visual, edge, nextEdge: null, laneIndex, progress,
       speed: 0, seed: index * 7919 + 17,
       waitingAt: null, stoppedSeconds: 0, turnCount: 0,
-      transitionFrom: null, transitionYaw: pose.yaw,
+      transitionFrom: null,
     };
   }
 
@@ -494,8 +493,13 @@ export class TrafficSystem {
       const overflow = vehicle.progress - segment.lengthM;
       if (vehicle.waitingAt) this.controller.dequeue(vehicle.waitingAt, vehicle.id);
       const endPose = this.graph.getLanePose(vehicle.edge, vehicle.laneIndex, segment.lengthM);
-      vehicle.transitionFrom = { ...endPose.position };
-      vehicle.transitionYaw = endPose.yaw;
+      vehicle.transitionFrom = {
+        ...endPose,
+        position: { ...endPose.position },
+        tangent: { ...endPose.tangent },
+        right: { ...endPose.right },
+        up: { ...endPose.up },
+      };
       vehicle.edge = nextEdge;
       vehicle.progress = Math.min(overflow, this.graph.getSegment(nextEdge.segmentId).lengthM - 0.01);
       vehicle.laneIndex = Math.min(
@@ -542,14 +546,54 @@ export class TrafficSystem {
     }
     const t = smoothstep(vehicle.progress / TURN_BLEND_M);
     const from = vehicle.transitionFrom;
+    const blendVector = (a: THREE.Vector3, b: { x: number; y: number; z: number }) => ({
+      x: THREE.MathUtils.lerp(a.x, b.x, t),
+      y: THREE.MathUtils.lerp(a.y, b.y, t),
+      z: THREE.MathUtils.lerp(a.z, b.z, t),
+    });
+    const normalizeVector = (value: { x: number; y: number; z: number }) => {
+      const length = Math.hypot(value.x, value.y, value.z) || 1;
+      return { x: value.x / length, y: value.y / length, z: value.z / length };
+    };
+    const cross = (
+      a: { x: number; y: number; z: number },
+      b: { x: number; y: number; z: number },
+    ) => ({
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x,
+    });
+    const dot = (
+      a: { x: number; y: number; z: number },
+      b: { x: number; y: number; z: number },
+    ) => a.x * b.x + a.y * b.y + a.z * b.z;
+    const tangent = normalizeVector(blendVector(
+      new THREE.Vector3(from.tangent.x, from.tangent.y, from.tangent.z), pose.tangent,
+    ));
+    const blendedRight = blendVector(
+      new THREE.Vector3(from.right.x, from.right.y, from.right.z), pose.right,
+    );
+    const projection = dot(blendedRight, tangent);
+    let right = normalizeVector({
+      x: blendedRight.x - tangent.x * projection,
+      y: blendedRight.y - tangent.y * projection,
+      z: blendedRight.z - tangent.z * projection,
+    });
+    const up = normalizeVector(cross(tangent, right));
+    right = normalizeVector(cross(up, tangent));
+    const horizontalLength = Math.hypot(tangent.x, tangent.z) || 1;
     return {
       ...pose,
       position: {
-        x: THREE.MathUtils.lerp(from.x, pose.position.x, t),
-        y: THREE.MathUtils.lerp(from.y, pose.position.y, t),
-        z: THREE.MathUtils.lerp(from.z, pose.position.z, t),
+        x: THREE.MathUtils.lerp(from.position.x, pose.position.x, t),
+        y: THREE.MathUtils.lerp(from.position.y, pose.position.y, t),
+        z: THREE.MathUtils.lerp(from.position.z, pose.position.z, t),
       },
-      yaw: vehicle.transitionYaw + angleDelta(vehicle.transitionYaw, pose.yaw) * t,
+      tangent,
+      right,
+      up,
+      yaw: Math.atan2(tangent.x, tangent.z),
+      pitch: Math.atan2(tangent.y, horizontalLength),
     };
   }
 
