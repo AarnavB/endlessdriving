@@ -9,6 +9,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 const graphPath = resolve(root, 'src/world/nyc/CityRoadGraph.ts');
+const urbanPath = resolve(root, 'src/world/nyc/CityUrbanModel.ts');
 const managerPath = resolve(root, 'src/world/nyc/NYCCityChunkManager.ts');
 const trafficPath = resolve(root, 'src/game/TrafficSystem.ts');
 const gamePath = resolve(root, 'src/game/Game.ts');
@@ -33,6 +34,7 @@ async function transpile(sourcePath, destinationPath, replacements = []) {
 }
 
 const graphTemp = resolve(root, 'src/world/nyc/.CityRoadGraph.regression.mjs');
+const urbanTemp = resolve(root, 'src/world/nyc/.CityUrbanModel.regression.mjs');
 const managerTemp = resolve(root, 'src/world/nyc/.NYCCityChunkManager.regression.mjs');
 const trafficTemp = resolve(root, 'src/game/.TrafficSystem.regression.mjs');
 let physics;
@@ -40,8 +42,10 @@ let manager;
 let traffic;
 try {
   await transpile(graphPath, graphTemp);
+  await transpile(urbanPath, urbanTemp);
   await transpile(managerPath, managerTemp, [
     ["from './CityRoadGraph'", "from './.CityRoadGraph.regression.mjs'"],
+    ["from './CityUrbanModel'", "from './.CityUrbanModel.regression.mjs'"],
   ]);
   await transpile(trafficPath, trafficTemp, [
     ["from '../world/nyc/CityRoadGraph'", "from '../world/nyc/.CityRoadGraph.regression.mjs'"],
@@ -138,6 +142,17 @@ try {
 
   for (const segmentId of [...interchange.entryRampSegmentIds, ...interchange.exitRampSegmentIds]) {
     const segment = graph.getSegment(segmentId);
+    const fromNode = graph.getIntersection(segment.fromNodeId);
+    const toNode = graph.getIntersection(segment.toNodeId);
+    const startPose = graph.getCenterlinePose(segmentId, 0).position;
+    const endPose = graph.getCenterlinePose(segmentId, segment.lengthM).position;
+    assert(Math.hypot(startPose.x - fromNode.position.x, startPose.y - fromNode.position.y,
+      startPose.z - fromNode.position.z) < 1e-5,
+    'ramp ' + segmentId + ' starts at its declared graph node');
+    assert(Math.hypot(endPose.x - toNode.position.x, endPose.y - toNode.position.y,
+      endPose.z - toNode.position.z) < 1e-5,
+    'ramp ' + segmentId + ' terminates at its declared graph node');
+    assert(segment.profile.widthM > 0, 'ramp ' + segmentId + ' has a valid drivable width');
     let maximumObservedGradient = 0;
     let previous = graph.getCenterlinePose(segmentId, 0).position;
     for (let sample = 1; sample <= 48; sample++) {
@@ -171,6 +186,12 @@ try {
   assert(routeBackDown.some((edge) => edge.direction < 0
     && graph.getSegment(edge.segmentId).roadType === 'entrance-ramp'),
   'bidirectional ramp connectivity supports the reverse route');
+  const routeBackOntoDeck = graph.findRoute(
+    interchange.groundExitNodeId, interchange.deckCrossingNodeId,
+  );
+  assert(routeBackOntoDeck.some((edge) => edge.direction < 0
+    && graph.getSegment(edge.segmentId).roadType === 'exit-ramp'),
+  'the exit ramp is connected and traversable in reverse as well');
 
   // A remote chunk deterministically materialises the same elevated corridor
   // and a second ramp pair; multi-level generation is not limited to the
@@ -347,6 +368,13 @@ try {
   assert(/rightOfWaySegments/.test(managerSource)
     && /intersectsElevatedRightOfWay/.test(managerSource),
     'procedural building placement reserves clear footprints for elevated roads and ramps');
+  assert(/isAabbClearOfRoadNetwork/.test(managerSource)
+    && /propPlacementIndex/.test(managerSource)
+    && /graph-aligned-streetlight-poles/.test(managerSource),
+    'environment placement is footprint-aware and aligned to authoritative street geometry');
+  assert(/buildingColliders/.test(managerSource)
+    && /buildingColliders !== buildingSpecs\.length/.test(managerSource),
+    'each streamed building is required to receive a matching static collider');
   assert(/removeRigidBody\(chunk\.body\)/.test(managerSource) && /geometry\.dispose\(\)/.test(managerSource),
     'chunk disposal releases colliders and chunk geometry');
   assert(/this\.originOffset\.add\(delta\)/.test(managerSource),
@@ -378,6 +406,10 @@ try {
   const initialChunks = manager.getDiagnostics();
   assert(initialChunks.activeChunks >= 1 && initialChunks.activeChunks <= 9,
     'chunk streamer loads the spawn chunk and remains within its bounded radius');
+  assert.equal(initialChunks.buildingColliders, initialChunks.buildings,
+    'all streamed visible building footprints have registered Rapier colliders');
+  assert(initialChunks.environmentObjects > 0,
+    'validated street and park objects register matching static support colliders');
   const terrainChunk = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
   const terrainMesh = terrainChunk?.getObjectByName('terrain-heightfield');
   assert(terrainMesh instanceof THREE.Mesh, 'streamed city chunk includes its terrain heightfield mesh');
@@ -565,6 +597,7 @@ try {
   if (physics) physics.free();
   await Promise.all([
     rm(graphTemp, { force: true }),
+    rm(urbanTemp, { force: true }),
     rm(managerTemp, { force: true }),
     rm(trafficTemp, { force: true }),
   ]);
