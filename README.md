@@ -55,7 +55,9 @@ The `fix/vehicle-movement` branch retains the Rapier movement/steering correctio
 | S / ↓ | Brake, then reverse at low speed (neutral remains brake-only) |
 | A / D or ← / → | Steer |
 | Space | Handbrake |
-| E / Q | Gear up / down while in manual mode; Q from first selects neutral |
+| E / Q | Gear up / down while in manual mode |
+| N | Select neutral immediately from any gear |
+| Left / Right Shift | Clutch pedal: hold to disengage, release to engage |
 | HUD gear selector | Select N, D, or a manual forward gear |
 | M | Toggle automatic / manual transmission |
 | C | Cycle camera |
