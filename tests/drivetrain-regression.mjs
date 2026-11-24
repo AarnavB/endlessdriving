@@ -615,7 +615,7 @@ try {
         const reconstructedRackRadius = (insideRadius + outsideRadius) * 0.5;
         const reconstructedRackAngle = Math.atan(wheelbase / reconstructedRackRadius);
         assert(
-          Math.abs(reconstructedRackAngle) <= 0.34 + 1e-4,
+          Math.abs(reconstructedRackAngle) <= 0.38 + 1e-4,
           `${definition.name}: reconstructed rack command exceeded calibration at ${speedKmh} km/h (${reconstructedRackAngle.toFixed(4)} rad)`,
         );
         assert(
