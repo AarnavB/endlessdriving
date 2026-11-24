@@ -839,8 +839,18 @@ export class NYCCityChunkManager {
     // The bridge soffit is the overhead clearance surface; this liner provides
     // retaining walls, portal frames and low-intensity ceiling illumination.
     addBox('underpass-ceiling-liner', 0, 5.72, 320, 20.4, 0.36, 80, this.underpassMaterial);
-    addBox('underpass-west-retaining-wall', -10.2, 2.9, 320, 0.65, 5.8, 80, this.bridgeConcreteMaterial);
-    addBox('underpass-east-retaining-wall', 10.2, 2.9, 320, 0.65, 5.8, 80, this.bridgeConcreteMaterial);
+    // Retaining walls stop short of the at-grade crossing at z=320. The
+    // transverse street stays open while the north/south underpass continues
+    // beneath the deck; closing this gap would create an invisible roadblock.
+    for (const [section, centreZ, length] of [
+      ['north', 294, 28],
+      ['south', 346, 28],
+    ] as const) {
+      addBox('underpass-west-retaining-wall-' + section, -10.2, 2.9, centreZ,
+        0.65, 5.8, length, this.bridgeConcreteMaterial);
+      addBox('underpass-east-retaining-wall-' + section, 10.2, 2.9, centreZ,
+        0.65, 5.8, length, this.bridgeConcreteMaterial);
+    }
     addBox('underpass-north-portal-header', 0, 5.35, 280, 20.4, 0.72, 0.8, this.bridgeConcreteMaterial);
     addBox('underpass-south-portal-header', 0, 5.35, 360, 20.4, 0.72, 0.8, this.bridgeConcreteMaterial);
     for (let i = 0; i < 5; i++) {
@@ -856,11 +866,13 @@ export class NYCCityChunkManager {
       body,
     );
     for (const side of [-1, 1]) {
-      this.physics.createCollider(
-        RAPIER.ColliderDesc.cuboid(0.325, 2.9, 40)
-          .setTranslation(side * 10.2 - centerX, 2.9, 320 - centerZ).setFriction(0.8),
-        body,
-      );
+      for (const wallCentreZ of [294, 346]) {
+        this.physics.createCollider(
+          RAPIER.ColliderDesc.cuboid(0.325, 2.9, 14)
+            .setTranslation(side * 10.2 - centerX, 2.9, wallCentreZ - centerZ).setFriction(0.8),
+          body,
+        );
+      }
     }
   }
 
