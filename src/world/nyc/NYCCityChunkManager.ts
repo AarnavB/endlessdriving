@@ -628,10 +628,27 @@ export class NYCCityChunkManager {
     // vehicle passing below, never a normal ground-level vehicle.
     if (elevatedRoadGeometry) this.addTrimeshCollider(body, elevatedRoadGeometry, 0.96);
     if (elevatedUndersideGeometry) this.addTrimeshCollider(body, elevatedUndersideGeometry, 0.78);
+    // Edge barriers are collidable as well as instanced visuals, so traffic
+    // cannot leave the elevated deck or slide through ramp guardrails.
+    for (const barrier of barrierSpecs) {
+      const rotation = barrier.rotation;
+      this.physics.createCollider(
+        RAPIER.ColliderDesc.cuboid(
+          barrier.scale.x * 0.5, barrier.scale.y * 0.5, barrier.scale.z * 0.5,
+        )
+          .setTranslation(
+            barrier.position.x - centerX, barrier.position.y, barrier.position.z - centerZ,
+          )
+          .setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w })
+          .setFriction(0.82)
+          .setRestitution(0),
+        body,
+      );
+    }
     for (const pier of pierSpecs) {
       const height = pier.scale.y;
       this.physics.createCollider(
-        RAPIER.ColliderDesc.cuboid(pier.scale.x * 0.5, height * 0.5, pier.scale.z * 0.5)
+        RAPIER.ColliderDesc.cuboid(0.98, height * 0.5, 0.98)
           .setTranslation(pier.position.x - centerX, height * 0.5, pier.position.z - centerZ)
           .setFriction(0.82),
         body,
@@ -735,20 +752,26 @@ export class NYCCityChunkManager {
     caps: InstanceSpec[],
   ): void {
     if (segment.roadType === 'surface' || segment.roadType === 'underpass') return;
-    const forward = new THREE.Vector3(0, 0, 1);
     const barrierRotation = new THREE.Quaternion();
+    const barrierMatrix = new THREE.Matrix4();
+    const barrierRight = new THREE.Vector3();
+    const barrierUp = new THREE.Vector3();
+    const barrierForward = new THREE.Vector3();
+    const barrierCentre = new THREE.Vector3();
     for (let distance = 4; distance < segment.lengthM; distance += 8) {
       const pose = this.graph.getCenterlinePose(segment.id, distance);
       if (pose.position.x < bounds.minX || pose.position.x >= bounds.maxX
         || pose.position.z < bounds.minZ || pose.position.z >= bounds.maxZ) continue;
-      const tangent = new THREE.Vector3(pose.tangent.x, 0, pose.tangent.z).normalize();
-      if (tangent.lengthSq() < 0.5) continue;
-      barrierRotation.setFromUnitVectors(forward, tangent);
+      barrierRight.set(pose.right.x, pose.right.y, pose.right.z).normalize();
+      barrierUp.set(pose.up.x, pose.up.y, pose.up.z).normalize();
+      barrierForward.set(pose.tangent.x, pose.tangent.y, pose.tangent.z).normalize();
+      if (barrierForward.lengthSq() < 0.5) continue;
+      barrierMatrix.makeBasis(barrierRight, barrierUp, barrierForward);
+      barrierRotation.setFromRotationMatrix(barrierMatrix);
       for (const side of [-1, 1]) {
-        const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z)
-          .addScaledVector(new THREE.Vector3(pose.right.x, pose.right.y, pose.right.z),
-            side * (segment.profile.widthM * 0.5 - 0.12))
-          .addScaledVector(new THREE.Vector3(pose.up.x, pose.up.y, pose.up.z), 0.56);
+        const position = barrierCentre.set(pose.position.x, pose.position.y, pose.position.z)
+          .addScaledVector(barrierRight, side * (segment.profile.widthM * 0.5 - 0.12))
+          .addScaledVector(barrierUp, 0.56).clone();
         barriers.push({
           position,
           rotation: barrierRotation.clone(),
