@@ -1,6 +1,9 @@
 export type CityRoadAxis = "x" | "z";
-export type CityRoadCategory = "avenue" | "street" | "alley" | "bridge";
+export type CityRoadCategory = "avenue" | "street" | "alley" | "bridge" | "expressway" | "ramp" | "underpass";
 export type CityDirectionality = "both" | "forward" | "reverse";
+export type CityRoadType = "surface" | "elevated-highway" | "entrance-ramp" | "exit-ramp" | "underpass";
+export type CityRoadLevelKind = "ground" | "elevated" | "ramp" | "underpass";
+export type CityIntersectionType = "at-grade" | "merge" | "diverge" | "grade-separated";
 
 export interface CityVector3 { x: number; y: number; z: number; }
 export interface CityIntersection {
@@ -8,6 +11,11 @@ export interface CityIntersection {
   gridX: number;
   gridZ: number;
   position: CityVector3;
+  elevationM: number;
+  level: number;
+  kind: CityRoadLevelKind;
+  intersectionType: CityIntersectionType;
+  signalControlled: boolean;
   signalOffsetSeconds: number;
 }
 export interface CityRoadProfile {
@@ -29,6 +37,13 @@ export interface CityRoadSegment {
   axis: CityRoadAxis;
   lengthM: number;
   profile: CityRoadProfile;
+  level: number;
+  roadType: CityRoadType;
+  maxGradient: number;
+  horizontalCurvature: number;
+  verticalCurvature: number;
+  controlPoints?: [CityVector3, CityVector3];
+  label?: string;
 }
 export interface CityRoadEdge {
   segmentId: string;
@@ -36,19 +51,35 @@ export interface CityRoadEdge {
   toNodeId: string;
   direction: 1 | -1;
 }
-export interface CityLanePose {
+export interface CityCenterlinePose {
   position: CityVector3;
   tangent: CityVector3;
   right: CityVector3;
+  up: CityVector3;
   yaw: number;
+  pitch: number;
+}
+export interface CityLanePose extends CityCenterlinePose {
   laneIndex: number;
   distanceAlongM: number;
+}
+
+export interface CityInterchangeDescriptor {
+  groundEntryNodeId: string;
+  groundExitNodeId: string;
+  deckCrossingNodeId: string;
+  entryRampSegmentIds: string[];
+  exitRampSegmentIds: string[];
+  highwaySegmentIds: string[];
+  underpassSegmentIds: string[];
 }
 
 export const CITY_BLOCK_SPACING_M = 160;
 export const CITY_CHUNK_SIZE_M = 512;
 export const CITY_LANE_WIDTH_M = 3.4;
+export const CITY_HIGHWAY_ELEVATION_M = 7.2;
 const SIGNAL_CYCLE_SECONDS = 56;
+const CURVE_SAMPLE_COUNT = 48;
 
 function mod(value: number, divisor: number): number {
   return ((value % divisor) + divisor) % divisor;
@@ -66,6 +97,9 @@ function hash(value: string, seed: number): number {
   return (h ^ (h >>> 16)) >>> 0;
 }
 function nodeId(x: number, z: number): string { return String(x) + ":" + String(z); }
+function levelNodeId(level: number, x: number, z: number): string {
+  return "level:" + String(level) + ":" + String(x) + ":" + String(z);
+}
 function parseNodeId(id: string): { x: number; z: number } {
   const parts = id.split(":");
   const x = Number(parts[0]);
@@ -75,18 +109,58 @@ function parseNodeId(id: string): { x: number; z: number } {
   }
   return { x, z };
 }
+function vectorLength(v: CityVector3): number {
+  return Math.hypot(v.x, v.y, v.z);
+}
+function normalize(v: CityVector3): CityVector3 {
+  const length = vectorLength(v) || 1;
+  return { x: v.x / length, y: v.y / length, z: v.z / length };
+}
+function subtract(a: CityVector3, b: CityVector3): CityVector3 {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+function addScaled(a: CityVector3, b: CityVector3, scale: number): CityVector3 {
+  return { x: a.x + b.x * scale, y: a.y + b.y * scale, z: a.z + b.z * scale };
+}
+function cross(a: CityVector3, b: CityVector3): CityVector3 {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+function angleDelta(from: number, to: number): number {
+  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
+interface CurveSample {
+  distance: number;
+  t: number;
+  position: CityVector3;
+}
 
 export class CityRoadGraph {
   private readonly intersections = new Map<string, CityIntersection>();
   private readonly segments = new Map<string, CityRoadSegment>();
+  private readonly customSegments = new Map<string, CityRoadSegment>();
+  private readonly customAdjacency = new Map<string, CityRoadEdge[]>();
+  private readonly curveTables = new Map<string, CurveSample[]>();
+  private interchange!: CityInterchangeDescriptor;
 
   constructor(readonly seed: number) {
     if (!Number.isFinite(seed)) throw new RangeError("City graph seed must be finite.");
+    this.buildRepresentativeInterchange();
   }
 
-  getIntersectionId(gridX: number, gridZ: number): string {
-    if (!Number.isInteger(gridX) || !Number.isInteger(gridZ)) throw new RangeError("Grid indices must be integers.");
-    return nodeId(gridX, gridZ);
+  /**
+   * Ground-level IDs retain their established x:z form. A non-zero level is
+   * part of the identity, so coincident X/Z coordinates never imply a link.
+   */
+  getIntersectionId(gridX: number, gridZ: number, level = 0): string {
+    if (!Number.isInteger(gridX) || !Number.isInteger(gridZ) || !Number.isInteger(level)) {
+      throw new RangeError("Grid indices and road levels must be integers.");
+    }
+    return level === 0 ? nodeId(gridX, gridZ) : levelNodeId(level, gridX, gridZ);
   }
 
   getIntersection(id: string): CityIntersection {
@@ -98,14 +172,19 @@ export class CityRoadGraph {
       gridX: grid.x,
       gridZ: grid.z,
       position: { x: grid.x * CITY_BLOCK_SPACING_M, y: 0, z: grid.z * CITY_BLOCK_SPACING_M },
+      elevationM: 0,
+      level: 0,
+      kind: "ground",
+      intersectionType: "at-grade",
+      signalControlled: true,
       signalOffsetSeconds: (hash(id, this.seed) % 4400) / 100,
     };
     this.intersections.set(id, intersection);
     return intersection;
   }
 
-  getIntersectionAt(gridX: number, gridZ: number): CityIntersection {
-    return this.getIntersection(nodeId(gridX, gridZ));
+  getIntersectionAt(gridX: number, gridZ: number, level = 0): CityIntersection {
+    return this.getIntersection(this.getIntersectionId(gridX, gridZ, level));
   }
 
   getRoadProfile(axis: CityRoadAxis, lineIndex: number): CityRoadProfile {
@@ -137,6 +216,9 @@ export class CityRoadGraph {
   getSegmentBetween(fromId: string, toId: string): CityRoadSegment {
     const from = this.getIntersection(fromId);
     const to = this.getIntersection(toId);
+    if (from.level !== 0 || to.level !== 0) {
+      throw new RangeError("Grid segments are ground-level only; use an explicit levelled connection.");
+    }
     const dx = to.gridX - from.gridX;
     const dz = to.gridZ - from.gridZ;
     if (Math.abs(dx) + Math.abs(dz) !== 1) {
@@ -152,6 +234,10 @@ export class CityRoadGraph {
     const startNode = axis === "x" ? this.getIntersectionAt(lowX, from.gridZ) : this.getIntersectionAt(from.gridX, lowZ);
     const endNode = axis === "x" ? this.getIntersectionAt(lowX + 1, from.gridZ) : this.getIntersectionAt(from.gridX, lowZ + 1);
     const lineIndex = axis === "x" ? from.gridZ : from.gridX;
+    const profile = this.getRoadProfile(axis, lineIndex);
+    // The north/south street through grid line zero is the designated
+    // grade-separated underpass beneath the east/west expressway.
+    const roadType: CityRoadType = axis === "z" && lineIndex === 0 ? "underpass" : "surface";
     const segment: CityRoadSegment = {
       id,
       fromNodeId: startNode.id,
@@ -160,13 +246,20 @@ export class CityRoadGraph {
       end: { ...endNode.position },
       axis,
       lengthM: CITY_BLOCK_SPACING_M,
-      profile: this.getRoadProfile(axis, lineIndex),
+      profile: roadType === "underpass" ? { ...profile, category: "underpass" } : profile,
+      level: 0,
+      roadType,
+      maxGradient: 0.08,
+      horizontalCurvature: 0,
+      verticalCurvature: 0,
     };
     this.segments.set(id, segment);
     return segment;
   }
 
   getEdgeFromTo(fromId: string, toId: string): CityRoadEdge {
+    const custom = this.customAdjacency.get(fromId)?.find((edge) => edge.toNodeId === toId);
+    if (custom) return { ...custom };
     const segment = this.getSegmentBetween(fromId, toId);
     const direction: 1 | -1 = fromId === segment.fromNodeId ? 1 : -1;
     const rule = segment.profile.directionality;
@@ -177,6 +270,8 @@ export class CityRoadGraph {
   }
 
   getSegment(segmentId: string): CityRoadSegment {
+    const special = this.customSegments.get(segmentId);
+    if (special) return special;
     const cached = this.segments.get(segmentId);
     if (cached) return cached;
     const parts = segmentId.split(":");
@@ -191,46 +286,60 @@ export class CityRoadGraph {
 
   getOutgoingEdges(intersectionId: string): CityRoadEdge[] {
     const node = this.getIntersection(intersectionId);
-    const candidates = [
-      [node.gridX + 1, node.gridZ],
-      [node.gridX - 1, node.gridZ],
-      [node.gridX, node.gridZ + 1],
-      [node.gridX, node.gridZ - 1],
-    ];
     const result: CityRoadEdge[] = [];
-    for (const [x, z] of candidates) {
-      try { result.push(this.getEdgeFromTo(intersectionId, nodeId(x, z))); } catch { /* prohibited one-way edge */ }
+    if (node.level === 0) {
+      const candidates = [
+        [node.gridX + 1, node.gridZ],
+        [node.gridX - 1, node.gridZ],
+        [node.gridX, node.gridZ + 1],
+        [node.gridX, node.gridZ - 1],
+      ];
+      for (const [x, z] of candidates) {
+        try { result.push(this.getEdgeFromTo(intersectionId, nodeId(x, z))); }
+        catch { /* prohibited one-way edge or absent explicit connection */ }
+      }
     }
+    for (const edge of this.customAdjacency.get(intersectionId) ?? []) result.push({ ...edge });
     return result;
+  }
+
+  getCenterlinePose(segmentId: string, distanceAlongM: number, direction: 1 | -1 = 1): CityCenterlinePose {
+    const segment = this.getSegment(segmentId);
+    const distance = Math.max(0, Math.min(segment.lengthM, distanceAlongM));
+    const canonicalDistance = direction > 0 ? distance : segment.lengthM - distance;
+    const sample = this.sampleSegment(segment, canonicalDistance);
+    const tangent = normalize({
+      x: sample.tangent.x * direction,
+      y: sample.tangent.y * direction,
+      z: sample.tangent.z * direction,
+    });
+    const horizontalLength = Math.hypot(tangent.x, tangent.z) || 1;
+    const right = normalize({ x: tangent.z / horizontalLength, y: 0, z: -tangent.x / horizontalLength });
+    const up = normalize(cross(tangent, right));
+    return {
+      position: { ...sample.position },
+      tangent,
+      right,
+      up,
+      yaw: Math.atan2(tangent.x, tangent.z),
+      pitch: Math.atan2(tangent.y, horizontalLength),
+    };
   }
 
   getLanePose(edge: CityRoadEdge, laneIndex: number, distanceAlongM: number): CityLanePose {
     const segment = this.getSegment(edge.segmentId);
     const lane = Math.max(0, Math.min(segment.profile.lanesPerDirection - 1, Math.trunc(laneIndex)));
     const distance = Math.max(0, Math.min(segment.lengthM, distanceAlongM));
-    const direction = edge.direction;
-    const tangent = {
-      x: (segment.end.x - segment.start.x) / segment.lengthM * direction,
-      y: 0,
-      z: (segment.end.z - segment.start.z) / segment.lengthM * direction,
-    };
-    const right = { x: tangent.z, y: 0, z: -tangent.x };
+    const center = this.getCenterlinePose(segment.id, distance, edge.direction);
     const isTwoWay = segment.profile.directionality === "both";
     const laneOffset = isTwoWay
       ? segment.profile.lanesPerDirection * segment.profile.laneWidthM
         - segment.profile.laneWidthM * 0.5 - lane * segment.profile.laneWidthM
       : (segment.profile.lanesPerDirection - 1) * segment.profile.laneWidthM * 0.5
         - lane * segment.profile.laneWidthM;
-    const start = direction > 0 ? segment.start : segment.end;
     return {
-      position: {
-        x: start.x + tangent.x * distance + right.x * laneOffset,
-        y: 0,
-        z: start.z + tangent.z * distance + right.z * laneOffset,
-      },
-      tangent,
-      right,
-      yaw: Math.atan2(tangent.x, tangent.z),
+      ...center,
+      position: addScaled(center.position, center.right, laneOffset),
       laneIndex: lane,
       distanceAlongM: distance,
     };
@@ -241,7 +350,13 @@ export class CityRoadGraph {
     return this.getLanePose(edge, 0, 42);
   }
 
-  getNearestLanePose(x: number, z: number, preferredX = 0, preferredZ = 1): CityLanePose {
+  getNearestLanePose(
+    x: number,
+    z: number,
+    preferredX = 0,
+    preferredZ = 1,
+    preferredY = 0,
+  ): CityLanePose {
     const verticalLine = Math.round(x / CITY_BLOCK_SPACING_M);
     const horizontalLine = Math.round(z / CITY_BLOCK_SPACING_M);
     const verticalProfile = this.getRoadProfile("z", verticalLine);
@@ -275,11 +390,42 @@ export class CityRoadGraph {
         : (index + 1) * CITY_BLOCK_SPACING_M - x;
       return this.closestLanePose(edge, x, z, progress);
     };
-    return lanePose(useVertical ? "z" : horizontalFits ? "x" : verticalDistance <= horizontalDistance ? "z" : "x");
+
+    const gridPose = lanePose(useVertical ? "z" : horizontalFits ? "x"
+      : verticalDistance <= horizontalDistance ? "z" : "x");
+    let bestPose = gridPose;
+    let bestDistance = (gridPose.position.x - x) ** 2
+      + (gridPose.position.y - preferredY) ** 2 + (gridPose.position.z - z) ** 2;
+
+    // Curved and elevated segments are sampled in 3D, so a road above an
+    // underpass cannot win a nearest-road query solely on horizontal distance.
+    for (const segment of this.customSegments.values()) {
+      const minX = Math.min(segment.start.x, segment.end.x, ...(segment.controlPoints ?? []).map((p) => p.x));
+      const maxX = Math.max(segment.start.x, segment.end.x, ...(segment.controlPoints ?? []).map((p) => p.x));
+      const minZ = Math.min(segment.start.z, segment.end.z, ...(segment.controlPoints ?? []).map((p) => p.z));
+      const maxZ = Math.max(segment.start.z, segment.end.z, ...(segment.controlPoints ?? []).map((p) => p.z));
+      if (x < minX - segment.profile.widthM - 12 || x > maxX + segment.profile.widthM + 12
+        || z < minZ - segment.profile.widthM - 12 || z > maxZ + segment.profile.widthM + 12) continue;
+      for (const direction of [1, -1] as const) {
+        const edge = this.customAdjacency.get(direction > 0 ? segment.fromNodeId : segment.toNodeId)
+          ?.find((candidate) => candidate.segmentId === segment.id && candidate.direction === direction);
+        if (!edge) continue;
+        for (let distance = 0; distance <= segment.lengthM; distance += 8) {
+          const progress = Math.min(distance, segment.lengthM);
+          for (let lane = 0; lane < segment.profile.lanesPerDirection; lane++) {
+            const pose = this.getLanePose(edge, lane, progress);
+            const score = (pose.position.x - x) ** 2
+              + (pose.position.y - preferredY) ** 2 + (pose.position.z - z) ** 2;
+            if (score < bestDistance) { bestDistance = score; bestPose = pose; }
+          }
+        }
+      }
+    }
+    return bestPose;
   }
 
-  getNearestRoadHeading(x: number, z: number, preferredX = 0, preferredZ = 1): CityVector3 {
-    return this.getNearestLanePose(x, z, preferredX, preferredZ).tangent;
+  getNearestRoadHeading(x: number, z: number, preferredX = 0, preferredZ = 1, preferredY = 0): CityVector3 {
+    return this.getNearestLanePose(x, z, preferredX, preferredZ, preferredY).tangent;
   }
 
   findRoute(startNodeId: string, destinationNodeId: string): CityRoadEdge[] {
@@ -318,6 +464,269 @@ export class CityRoadGraph {
     return candidates[hash(intersectionId + "|" + previousNodeId, routeSeed) % candidates.length];
   }
 
+  getInterchangeDescriptor(): CityInterchangeDescriptor {
+    return {
+      groundEntryNodeId: this.interchange.groundEntryNodeId,
+      groundExitNodeId: this.interchange.groundExitNodeId,
+      deckCrossingNodeId: this.interchange.deckCrossingNodeId,
+      entryRampSegmentIds: [...this.interchange.entryRampSegmentIds],
+      exitRampSegmentIds: [...this.interchange.exitRampSegmentIds],
+      highwaySegmentIds: [...this.interchange.highwaySegmentIds],
+      underpassSegmentIds: [...this.interchange.underpassSegmentIds],
+    };
+  }
+
+  getSpecialSegmentsInBounds(minX: number, maxX: number, minZ: number, maxZ: number): CityRoadSegment[] {
+    const result: CityRoadSegment[] = [];
+    for (const segment of this.customSegments.values()) {
+      const points = [segment.start, segment.end, ...(segment.controlPoints ?? [])];
+      const segmentMinX = Math.min(...points.map((p) => p.x)) - segment.profile.widthM;
+      const segmentMaxX = Math.max(...points.map((p) => p.x)) + segment.profile.widthM;
+      const segmentMinZ = Math.min(...points.map((p) => p.z)) - segment.profile.widthM;
+      const segmentMaxZ = Math.max(...points.map((p) => p.z)) + segment.profile.widthM;
+      if (segmentMaxX >= minX && segmentMinX <= maxX && segmentMaxZ >= minZ && segmentMinZ <= maxZ) {
+        result.push(segment);
+      }
+    }
+    return result;
+  }
+
+  getUnderpassSegments(): CityRoadSegment[] {
+    const ids = this.interchange.underpassSegmentIds;
+    return ids.map((id) => this.getSegment(id));
+  }
+
+  private registerNode(
+    id: string,
+    gridX: number,
+    gridZ: number,
+    position: CityVector3,
+    level: number,
+    kind: CityRoadLevelKind,
+    intersectionType: CityIntersectionType,
+    signalControlled: boolean,
+  ): void {
+    this.intersections.set(id, {
+      id, gridX, gridZ, position: { ...position }, elevationM: position.y, level, kind,
+      intersectionType, signalControlled,
+      signalOffsetSeconds: (hash(id, this.seed) % 4400) / 100,
+    });
+  }
+
+  private registerCustomSegment(
+    id: string,
+    fromNodeId: string,
+    toNodeId: string,
+    roadType: CityRoadType,
+    profile: CityRoadProfile,
+    controlPoints: [CityVector3, CityVector3],
+    label: string,
+  ): CityRoadSegment {
+    const start = { ...this.getIntersection(fromNodeId).position };
+    const end = { ...this.getIntersection(toNodeId).position };
+    const segment: CityRoadSegment = {
+      id, fromNodeId, toNodeId, start, end, axis: "x", lengthM: 0, profile,
+      level: 1, roadType, maxGradient: 0.045, horizontalCurvature: 0,
+      verticalCurvature: 0, controlPoints: [{ ...controlPoints[0] }, { ...controlPoints[1] }], label,
+    };
+    const table = this.buildCurveTable(segment);
+    segment.lengthM = table[table.length - 1].distance;
+    let maxHorizontalCurvature = 0;
+    let maxVerticalCurvature = 0;
+    let lastYaw = Math.atan2(table[1].position.x - table[0].position.x, table[1].position.z - table[0].position.z);
+    let lastGrade = 0;
+    for (let i = 1; i < table.length; i++) {
+      const a = table[i - 1].position;
+      const b = table[i].position;
+      const run = Math.hypot(b.x - a.x, b.z - a.z) || 1e-6;
+      const grade = Math.abs((b.y - a.y) / run);
+      const yaw = Math.atan2(b.x - a.x, b.z - a.z);
+      maxHorizontalCurvature = Math.max(maxHorizontalCurvature, Math.abs(angleDelta(lastYaw, yaw)) / Math.max(0.01, table[i].distance - table[i - 1].distance));
+      maxVerticalCurvature = Math.max(maxVerticalCurvature, Math.abs(grade - lastGrade) / Math.max(0.01, table[i].distance - table[i - 1].distance));
+      lastYaw = yaw;
+      lastGrade = grade;
+    }
+    segment.horizontalCurvature = maxHorizontalCurvature;
+    segment.verticalCurvature = maxVerticalCurvature;
+    this.customSegments.set(id, segment);
+    this.curveTables.set(id, table);
+    const forward: CityRoadEdge = { segmentId: id, fromNodeId, toNodeId, direction: 1 };
+    const reverse: CityRoadEdge = { segmentId: id, fromNodeId: toNodeId, toNodeId: fromNodeId, direction: -1 };
+    const addEdge = (node: string, edge: CityRoadEdge): void => {
+      const edges = this.customAdjacency.get(node) ?? [];
+      edges.push(edge);
+      this.customAdjacency.set(node, edges);
+    };
+    if (profile.directionality !== "reverse") addEdge(fromNodeId, forward);
+    if (profile.directionality !== "forward") addEdge(toNodeId, reverse);
+    return segment;
+  }
+
+  private buildRepresentativeInterchange(): void {
+    const groundEntryNodeId = this.getIntersectionId(-3, 2);
+    const groundExitNodeId = this.getIntersectionId(5, 2);
+    this.getIntersection(groundEntryNodeId);
+    this.getIntersection(groundExitNodeId);
+
+    const entryMidNodeId = this.getIntersectionId(-2, 2, 1);
+    const deckStartNodeId = this.getIntersectionId(-1, 2, 1);
+    const deckCrossingNodeId = this.getIntersectionId(0, 2, 1);
+    const deckNodeOneId = this.getIntersectionId(1, 2, 1);
+    const deckNodeTwoId = this.getIntersectionId(2, 2, 1);
+    const deckExitNodeId = this.getIntersectionId(3, 2, 1);
+    const exitMidNodeId = this.getIntersectionId(4, 2, 1);
+
+    this.registerNode(entryMidNodeId, -2, 2, { x: -320, y: 3.6, z: 336 }, 1, "ramp", "merge", false);
+    this.registerNode(deckStartNodeId, -1, 2, { x: -160, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "merge", false);
+    this.registerNode(deckCrossingNodeId, 0, 2, { x: 0, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "grade-separated", false);
+    this.registerNode(deckNodeOneId, 1, 2, { x: 160, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "grade-separated", false);
+    this.registerNode(deckNodeTwoId, 2, 2, { x: 320, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "grade-separated", false);
+    this.registerNode(deckExitNodeId, 3, 2, { x: 480, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, 1, "elevated", "merge", false);
+    this.registerNode(exitMidNodeId, 4, 2, { x: 640, y: 3.6, z: 336 }, 1, "ramp", "merge", false);
+
+    const rampProfile: CityRoadProfile = {
+      category: "ramp", axis: "x", lineIndex: 2, lanesPerDirection: 1,
+      laneWidthM: 3.55, widthM: 9.4, speedLimitKmh: 45, directionality: "both",
+    };
+    const highwayProfile: CityRoadProfile = {
+      category: "expressway", axis: "x", lineIndex: 2, lanesPerDirection: 3,
+      laneWidthM: 3.65, widthM: 28.2, speedLimitKmh: 80, directionality: "both",
+    };
+
+    const entryRampSegmentIds = [
+      "interchange:entrance-ramp:west-a",
+      "interchange:entrance-ramp:west-b",
+    ];
+    this.registerCustomSegment(
+      entryRampSegmentIds[0], groundEntryNodeId, entryMidNodeId, "entrance-ramp", rampProfile,
+      [{ x: -426.6667, y: 0, z: 320 }, { x: -373.3333, y: 3.6, z: 336 }],
+      "West entrance ramp - lower transition",
+    );
+    this.registerCustomSegment(
+      entryRampSegmentIds[1], entryMidNodeId, deckStartNodeId, "entrance-ramp", rampProfile,
+      [{ x: -266.6667, y: 3.6, z: 336 }, { x: -213.3333, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }],
+      "West entrance ramp - upper transition",
+    );
+
+    const highwayNodeIds = [deckStartNodeId, deckCrossingNodeId, deckNodeOneId, deckNodeTwoId, deckExitNodeId];
+    const highwaySegmentIds: string[] = [];
+    for (let i = 0; i < highwayNodeIds.length - 1; i++) {
+      const id = "interchange:elevated-highway:" + String(i);
+      this.registerCustomSegment(
+        id, highwayNodeIds[i], highwayNodeIds[i + 1], "elevated-highway", highwayProfile,
+        [
+          { x: this.getIntersection(highwayNodeIds[i]).position.x + 160 / 3, y: CITY_HIGHWAY_ELEVATION_M, z: 320 },
+          { x: this.getIntersection(highwayNodeIds[i]).position.x + 320 / 3, y: CITY_HIGHWAY_ELEVATION_M, z: 320 },
+        ],
+        "East-west elevated urban expressway",
+      );
+      highwaySegmentIds.push(id);
+    }
+
+    const exitRampSegmentIds = [
+      "interchange:exit-ramp:east-a",
+      "interchange:exit-ramp:east-b",
+    ];
+    this.registerCustomSegment(
+      exitRampSegmentIds[0], deckExitNodeId, exitMidNodeId, "exit-ramp", rampProfile,
+      [{ x: 533.3333, y: CITY_HIGHWAY_ELEVATION_M, z: 320 }, { x: 586.6667, y: 3.6, z: 336 }],
+      "East exit ramp - upper transition",
+    );
+    this.registerCustomSegment(
+      exitRampSegmentIds[1], exitMidNodeId, groundExitNodeId, "exit-ramp", rampProfile,
+      [{ x: 693.3333, y: 3.6, z: 336 }, { x: 746.6667, y: 0, z: 320 }],
+      "East exit ramp - lower transition",
+    );
+
+    const underpassSegmentIds = [
+      this.getSegmentBetween(this.getIntersectionId(0, 1), this.getIntersectionId(0, 2)).id,
+      this.getSegmentBetween(this.getIntersectionId(0, 2), this.getIntersectionId(0, 3)).id,
+    ];
+    this.interchange = {
+      groundEntryNodeId,
+      groundExitNodeId,
+      deckCrossingNodeId,
+      entryRampSegmentIds,
+      exitRampSegmentIds,
+      highwaySegmentIds,
+      underpassSegmentIds,
+    };
+  }
+
+  private buildCurveTable(segment: CityRoadSegment): CurveSample[] {
+    const samples: CurveSample[] = [{ distance: 0, t: 0, position: { ...segment.start } }];
+    let cumulative = 0;
+    let previous = segment.start;
+    for (let i = 1; i <= CURVE_SAMPLE_COUNT; i++) {
+      const t = i / CURVE_SAMPLE_COUNT;
+      const position = this.evaluateCurve(segment, t);
+      cumulative += vectorLength(subtract(position, previous));
+      samples.push({ distance: cumulative, t, position });
+      previous = position;
+    }
+    return samples;
+  }
+
+  private evaluateCurve(segment: CityRoadSegment, t: number): CityVector3 {
+    if (!segment.controlPoints) {
+      return {
+        x: segment.start.x + (segment.end.x - segment.start.x) * t,
+        y: segment.start.y + (segment.end.y - segment.start.y) * t,
+        z: segment.start.z + (segment.end.z - segment.start.z) * t,
+      };
+    }
+    const u = 1 - t;
+    const c1 = segment.controlPoints[0];
+    const c2 = segment.controlPoints[1];
+    return {
+      x: u ** 3 * segment.start.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t ** 3 * segment.end.x,
+      y: u ** 3 * segment.start.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t ** 3 * segment.end.y,
+      z: u ** 3 * segment.start.z + 3 * u * u * t * c1.z + 3 * u * t * t * c2.z + t ** 3 * segment.end.z,
+    };
+  }
+
+  private evaluateCurveTangent(segment: CityRoadSegment, t: number): CityVector3 {
+    if (!segment.controlPoints) return subtract(segment.end, segment.start);
+    const u = 1 - t;
+    const c1 = segment.controlPoints[0];
+    const c2 = segment.controlPoints[1];
+    return {
+      x: 3 * u * u * (c1.x - segment.start.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (segment.end.x - c2.x),
+      y: 3 * u * u * (c1.y - segment.start.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (segment.end.y - c2.y),
+      z: 3 * u * u * (c1.z - segment.start.z) + 6 * u * t * (c2.z - c1.z) + 3 * t * t * (segment.end.z - c2.z),
+    };
+  }
+
+  private sampleSegment(
+    segment: CityRoadSegment,
+    distance: number,
+  ): { position: CityVector3; tangent: CityVector3 } {
+    if (!segment.controlPoints) {
+      return {
+        position: this.evaluateCurve(segment, distance / Math.max(1e-6, segment.lengthM)),
+        tangent: normalize(subtract(segment.end, segment.start)),
+      };
+    }
+    const table = this.curveTables.get(segment.id) ?? this.buildCurveTable(segment);
+    const clamped = Math.max(0, Math.min(segment.lengthM, distance));
+    let low = 0;
+    let high = table.length - 1;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (table[middle].distance < clamped) low = middle + 1;
+      else high = middle;
+    }
+    const upper = table[Math.min(table.length - 1, low)];
+    const lower = table[Math.max(0, low - 1)];
+    const span = upper.distance - lower.distance;
+    const blend = span > 1e-8 ? (clamped - lower.distance) / span : 0;
+    const t = lower.t + (upper.t - lower.t) * blend;
+    return {
+      position: this.evaluateCurve(segment, t),
+      tangent: normalize(this.evaluateCurveTangent(segment, t)),
+    };
+  }
+
   private getAllowedEdge(fromId: string, toId: string): CityRoadEdge {
     try { return this.getEdgeFromTo(fromId, toId); }
     catch { return this.getEdgeFromTo(toId, fromId); }
@@ -349,6 +758,7 @@ export class CityTrafficController {
 
   getSignalState(intersectionId: string, axis: CityRoadAxis): "green" | "yellow" | "red" {
     const node = this.graph.getIntersection(intersectionId);
+    if (!node.signalControlled) return "green";
     const phase = mod(this.elapsedSeconds + node.signalOffsetSeconds, SIGNAL_CYCLE_SECONDS);
     if (axis === "z") return phase < 16 ? "green" : phase < 18 ? "yellow" : "red";
     return phase >= 20 && phase < 36 ? "green" : phase >= 36 && phase < 38 ? "yellow" : "red";
@@ -358,13 +768,13 @@ export class CityTrafficController {
     return this.getSignalState(intersectionId, incomingAxis) === "green";
   }
 
-  /** State for a protected left-turn arrow on a specific approach. */
   getProtectedLeftTurnState(
     intersectionId: string,
     incomingAxis: CityRoadAxis,
     direction: 1 | -1,
   ): "green" | "red" {
     const node = this.graph.getIntersection(intersectionId);
+    if (!node.signalControlled) return "red";
     const phase = mod(this.elapsedSeconds + node.signalOffsetSeconds, SIGNAL_CYCLE_SECONDS);
     const approachIndex = incomingAxis === "z"
       ? direction > 0 ? 0 : 1
@@ -373,31 +783,20 @@ export class CityTrafficController {
     return phase >= leftStart && phase < leftStart + 4 ? "green" : "red";
   }
 
-  /**
-   * Movement-aware permission: straight and right movements use their
-   * protected axis phase; left turns receive a short exclusive approach phase.
-   * This avoids releasing opposing left-turn paths simultaneously.
-   */
   canEnterMovement(
     intersectionId: string,
     incoming: CityRoadEdge,
     outgoing: CityRoadEdge,
   ): boolean {
+    const node = this.graph.getIntersection(intersectionId);
+    if (!node.signalControlled || node.intersectionType !== "at-grade") return true;
     const incomingSegment = this.graph.getSegment(incoming.segmentId);
     const outgoingSegment = this.graph.getSegment(outgoing.segmentId);
-    const inVector = incomingSegment.axis === "z"
-      ? { x: 0, z: incoming.direction }
-      : { x: incoming.direction, z: 0 };
-    const outVector = outgoingSegment.axis === "z"
-      ? { x: 0, z: outgoing.direction }
-      : { x: outgoing.direction, z: 0 };
-    const incomingYaw = Math.atan2(inVector.x, inVector.z);
-    const outgoingYaw = Math.atan2(outVector.x, outVector.z);
-    const delta = Math.atan2(
-      Math.sin(outgoingYaw - incomingYaw),
-      Math.cos(outgoingYaw - incomingYaw),
-    );
-    const node = this.graph.getIntersection(intersectionId);
+    const inPose = this.graph.getCenterlinePose(incoming.segmentId, incomingSegment.lengthM, incoming.direction);
+    const outPose = this.graph.getCenterlinePose(outgoing.segmentId, 0, outgoing.direction);
+    const incomingYaw = Math.atan2(inPose.tangent.x, inPose.tangent.z);
+    const outgoingYaw = Math.atan2(outPose.tangent.x, outPose.tangent.z);
+    const delta = angleDelta(incomingYaw, outgoingYaw);
     const phase = mod(this.elapsedSeconds + node.signalOffsetSeconds, SIGNAL_CYCLE_SECONDS);
     if (delta < -0.5) {
       let approachIndex = 0;
@@ -408,6 +807,7 @@ export class CityTrafficController {
     }
     return this.getSignalState(intersectionId, incomingSegment.axis) === "green";
   }
+
   enqueue(intersectionId: string, vehicleId: string): void {
     let queue = this.queues.get(intersectionId);
     if (!queue) { queue = new Set<string>(); this.queues.set(intersectionId, queue); }
