@@ -48,6 +48,8 @@ export class InputManager {
       // Reverse the selected source once here so keyboard and gamepad agree.
       steer: invertSteeringDirection(Math.abs(gamepadSteer) > 0 ? gamepadSteer : keyboardSteer),
       handbrake: this.keys.has('Space'),
+      neutralPressed: this.justPressed.has('KeyN'),
+      clutchPedal: Number(this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')),
       shiftUpPressed: this.justPressed.has('KeyE'),
       shiftDownPressed: this.justPressed.has('KeyQ'),
     };
@@ -57,6 +59,7 @@ export class InputManager {
   consumeEdges(): void {
     this.justPressed.delete('KeyE');
     this.justPressed.delete('KeyQ');
+    this.justPressed.delete('KeyN');
   }
 
   /** Prevent a gear key pressed while paused from being applied after resume. */
@@ -86,11 +89,11 @@ export class InputManager {
 
     const handled = [
       'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-      'Space', 'KeyE', 'KeyQ', 'KeyC', 'KeyR', 'KeyH', 'KeyM', 'Escape', 'Enter', 'F3',
+      'Space', 'KeyE', 'KeyQ', 'KeyN', 'KeyC', 'KeyR', 'KeyH', 'KeyM', 'Escape', 'Enter', 'F3',
     ];
     if (handled.includes(event.code)) event.preventDefault();
 
-    if (!this.keys.has(event.code) && (event.code === 'KeyE' || event.code === 'KeyQ')) {
+    if (!this.keys.has(event.code) && (event.code === 'KeyE' || event.code === 'KeyQ' || event.code === 'KeyN')) {
       this.justPressed.add(event.code);
     }
     this.keys.add(event.code);
