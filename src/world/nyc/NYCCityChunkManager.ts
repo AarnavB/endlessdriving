@@ -966,6 +966,22 @@ export class NYCCityChunkManager {
     const lastGX = Math.ceil(maxX / CITY_BLOCK_SPACING_M);
     const firstGZ = Math.floor(minZ / CITY_BLOCK_SPACING_M);
     const lastGZ = Math.ceil(maxZ / CITY_BLOCK_SPACING_M);
+    const rightOfWaySegments = this.graph.getSpecialSegmentsInBounds(
+      minX - 80, maxX + 80, minZ - 80, maxZ + 80,
+    ).filter((segment) => segment.roadType === 'elevated-highway'
+      || segment.roadType === 'entrance-ramp' || segment.roadType === 'exit-ramp')
+      .map((segment) => {
+        const points = [segment.start, segment.end, ...(segment.controlPoints ?? [])];
+        const margin = segment.profile.widthM * 0.5 + 1;
+        return {
+          minX: Math.min(...points.map((point) => point.x)) - margin,
+          maxX: Math.max(...points.map((point) => point.x)) + margin,
+          minZ: Math.min(...points.map((point) => point.z)) - margin,
+          maxZ: Math.max(...points.map((point) => point.z)) + margin,
+          minY: Math.min(...points.map((point) => point.y)),
+          maxY: Math.max(...points.map((point) => point.y)),
+        };
+      });
 
     // Keep parcels on a deterministic 2x2 block plan. The building fronts
     // face the surrounding streets, while the centre gap leaves service and
@@ -1013,14 +1029,28 @@ export class NYCCityChunkManager {
               : 14 + variation * 2.9;
           }
 
-          result.push({
-            x: centreX + offsetX,
-            z: centreZ + offsetZ,
-            width,
-            depth,
-            height: Math.min(190, height),
-            colour: colourForBuilding(style),
-          });
+          const buildingX = centreX + offsetX;
+          const buildingZ = centreZ + offsetZ;
+          const buildingHeight = Math.min(190, height);
+          const intersectsElevatedRightOfWay = rightOfWaySegments.some((road) =>
+            road.maxY > 0.25 && road.minY < buildingHeight + 0.5
+            && road.maxX >= buildingX - width * 0.5
+            && road.minX <= buildingX + width * 0.5
+            && road.maxZ >= buildingZ - depth * 0.5
+            && road.minZ <= buildingZ + depth * 0.5);
+          // Do not procedural-spawn buildings through elevated decks or the
+          // swept footprint of their ramps. The bounds are conservative so
+          // chunk edges cannot expose a building clipping into a road ribbon.
+          if (!intersectsElevatedRightOfWay) {
+            result.push({
+              x: buildingX,
+              z: buildingZ,
+              width,
+              depth,
+              height: buildingHeight,
+              colour: colourForBuilding(style),
+            });
+          }
         }
       }
     }
