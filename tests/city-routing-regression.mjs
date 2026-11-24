@@ -328,6 +328,10 @@ try {
     && /elevated-highways-and-ramps/.test(managerSource)
     && /bridge-deck-undersides/.test(managerSource),
     'chunk rendering builds graph-derived elevated road decks and visible soffits');
+  assert(/sampleTerrainHeight/.test(managerSource)
+    && /terrain-heightfield/.test(managerSource)
+    && /groundGeometry\) this\.addTrimeshCollider/.test(managerSource),
+    'block topography is deterministic and the rendered heightfield has matching Rapier collision');
   assert(/elevatedRoadGeometry\) this\.addTrimeshCollider/.test(managerSource)
     && /elevatedUndersideGeometry\) this\.addTrimeshCollider/.test(managerSource)
     && /addUnderpassColliders\(body/.test(managerSource),
@@ -374,6 +378,40 @@ try {
   const initialChunks = manager.getDiagnostics();
   assert(initialChunks.activeChunks >= 1 && initialChunks.activeChunks <= 9,
     'chunk streamer loads the spawn chunk and remains within its bounded radius');
+  const terrainChunk = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
+  const terrainMesh = terrainChunk?.getObjectByName('terrain-heightfield');
+  assert(terrainMesh instanceof THREE.Mesh, 'streamed city chunk includes its terrain heightfield mesh');
+  assert(terrainMesh.geometry.getAttribute('color')?.count > 1000,
+    'terrain heightfield carries lightweight spatial surface colour variation');
+  assert(terrainMesh.geometry.getAttribute('normal')?.count === terrainMesh.geometry.getAttribute('position')?.count,
+    'terrain normals are sampled consistently at chunk boundaries');
+  const terrainPositions = terrainMesh.geometry.getAttribute('position');
+  let minimumTerrainY = Infinity;
+  let maximumTerrainY = -Infinity;
+  for (let vertex = 0; vertex < terrainPositions.count; vertex++) {
+    minimumTerrainY = Math.min(minimumTerrainY, terrainPositions.getY(vertex));
+    maximumTerrainY = Math.max(maximumTerrainY, terrainPositions.getY(vertex));
+  }
+  assert(maximumTerrainY - minimumTerrainY > 0.35,
+    'terrain has coherent elevation variation instead of a flat ground plane');
+  const terrainBlockX = Math.floor(terrainChunk.position.x / city.CITY_BLOCK_SPACING_M)
+    * city.CITY_BLOCK_SPACING_M + city.CITY_BLOCK_SPACING_M * 0.5;
+  const terrainBlockZ = Math.floor(terrainChunk.position.z / city.CITY_BLOCK_SPACING_M)
+    * city.CITY_BLOCK_SPACING_M + city.CITY_BLOCK_SPACING_M * 0.5;
+  const terrainProbeY = manager.sampleTerrainHeight(terrainBlockX, terrainBlockZ);
+  const streetDatumY = manager.sampleTerrainHeight(
+    Math.round(terrainBlockX / city.CITY_BLOCK_SPACING_M) * city.CITY_BLOCK_SPACING_M,
+    terrainBlockZ,
+  );
+  assert(Math.abs(streetDatumY + 0.405) < 1e-5,
+    'terrain blends smoothly back to the established ground-road datum');
+  physics.step();
+  const terrainHit = physics.castRay(
+    new RAPIER.Ray({ x: terrainBlockX, y: terrainProbeY + 8, z: terrainBlockZ }, { x: 0, y: -1, z: 0 }),
+    16, true,
+  );
+  assert(terrainHit && Math.abs(terrainHit.timeOfImpact - 8) < 0.25,
+    'Rapier raycast contacts the same generated terrain elevation used by the visible mesh');
 
   // The remote ramp has a right-of-way through the procedural block plan.
   // The manager's private method is TypeScript-private (not a JS # member),

@@ -238,10 +238,18 @@ export class VehicleController {
     );
     // A slower steering rack response filters abrupt digital keyboard inputs.
     // Vehicle-specific response remains a small modifier, not a large sensitivity multiplier.
+    // Increase rack response progressively with speed so a quick correction is
+    // not lost in the low-speed input filter. The curve is continuous and the
+    // underlying road-wheel angle remains bounded by the tyre model below.
+    const steeringResponseBySpeed = THREE.MathUtils.lerp(
+      1,
+      1.18,
+      THREE.MathUtils.smoothstep(this.speedMps, 13.9, 41.7),
+    );
     this.smoothedSteer = THREE.MathUtils.damp(
       this.smoothedSteer,
       input.steer,
-      this.definition.physics.steeringResponse * 4.5,
+      this.definition.physics.steeringResponse * 4.5 * steeringResponseBySpeed,
       safeDt,
     );
 
@@ -377,10 +385,14 @@ export class VehicleController {
     // cannot abruptly rotate the chassis at speed.
     const steeringWheelbase = this.definition.visual.wheelBase;
     const maxLateralAcceleration = profile.maxLateralAccelerationG * 9.81;
+    // Keep the physically meaningful v² relationship while recalibrating the
+    // per-vehicle lateral envelope for the high-grip performance tyres. The
+    // former parking-lock ceiling was unnecessarily restrictive at low speed;
+    // the dynamic tyre limit remains authoritative at road speed.
     const dynamicSteerLimit = Math.atan(
       (steeringWheelbase * maxLateralAcceleration) / (this.speedMps * this.speedMps + 1.5),
     );
-    const maxSteerAngle = Math.min(0.34, dynamicSteerLimit);
+    const maxSteerAngle = Math.min(0.38, dynamicSteerLimit);
     const centreSteerAngle = THREE.MathUtils.clamp(this.smoothedSteer, -1, 1) * maxSteerAngle;
 
     // Ackermann geometry: the front tyres converge on a shared instantaneous

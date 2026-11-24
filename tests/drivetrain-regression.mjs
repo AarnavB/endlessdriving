@@ -526,11 +526,56 @@ try {
         sim.dispose();
       }
     }
-    return { vehicle: definition.name, left: runDirection(-0.65), right: runDirection(0.65), result: 'PASS' };
+    const highSpeedYaw = [];
+    for (const speedKmh of [60, 80, 100, 120, 150]) {
+      for (const steer of [-0.55, 0.55]) {
+        const sim = createSimulation(definition, false, FIXED_DT);
+        try {
+          sim.vehicle.selectGear(0);
+          sim.vehicle.body.setLinvel({ x: 0, y: 0, z: speedKmh / 3.6 }, true);
+          const start = sim.vehicle.body.translation();
+          let previousYaw = Math.atan2(sim.vehicle.getForward().x, sim.vehicle.getForward().z);
+          let accumulatedYaw = 0;
+          for (let frame = 0; frame < 120; frame++) {
+            sim.step({ ...NEUTRAL_INPUT, steer });
+            const forward = sim.vehicle.getForward();
+            const yaw = Math.atan2(forward.x, forward.z);
+            let delta = yaw - previousYaw;
+            if (delta > Math.PI) delta -= Math.PI * 2;
+            if (delta < -Math.PI) delta += Math.PI * 2;
+            accumulatedYaw += delta;
+            previousYaw = yaw;
+          }
+          const finish = sim.vehicle.body.translation();
+          assert(accumulatedYaw * steer > 0.018,
+            `${definition.name}: ${steer < 0 ? 'left' : 'right'} tyre forces produced insufficient chassis yaw at ${speedKmh} km/h (${accumulatedYaw.toFixed(4)} rad)`);
+          assert((finish.x - start.x) * steer > 0.02,
+            `${definition.name}: chassis trajectory did not move in the commanded turn direction at ${speedKmh} km/h`);
+          assert(Math.abs(accumulatedYaw) < 1.25,
+            `${definition.name}: high-speed steering became unstable at ${speedKmh} km/h (${accumulatedYaw.toFixed(4)} rad)`);
+          highSpeedYaw.push({
+            speedKmh,
+            direction: steer < 0 ? 'left' : 'right',
+            yawRadians: Number(accumulatedYaw.toFixed(4)),
+            lateralDisplacementM: Number((finish.x - start.x).toFixed(3)),
+            result: 'PASS',
+          });
+        } finally {
+          sim.dispose();
+        }
+      }
+    }
+    return {
+      vehicle: definition.name,
+      left: runDirection(-0.65),
+      right: runDirection(0.65),
+      highSpeedYaw,
+      result: 'PASS',
+    };
   }
 
   function runSpeedSensitiveSteeringRegression(definition) {
-    const speedsKmh = [10, 40, 50, 80, 100, 150];
+    const speedsKmh = [10, 40, 50, 60, 80, 100, 120, 150];
     const samples = [];
     for (const speedKmh of speedsKmh) {
       const sim = createSimulation(definition, false, FIXED_DT);
@@ -591,12 +636,14 @@ try {
       assert(samples[i - 1].leftAngleRad > samples[i].leftAngleRad,
         `${definition.name}: steering did not progressively reduce from ${samples[i - 1].speedKmh} to ${samples[i].speedKmh} km/h (left ${samples[i - 1].leftAngleRad} -> ${samples[i].leftAngleRad} rad; right ${samples[i - 1].rightAngleRad} -> ${samples[i].rightAngleRad} rad)`);
     }
-    assert(samples[2].leftAngleRad >= 0.1,
-      `${definition.name}: steering authority remained too low at 50 km/h (${samples[2].leftAngleRad} rad)`);
-    assert(samples[4].leftAngleRad >= 0.02,
-      `${definition.name}: steering authority collapsed at 100 km/h (${samples[4].leftAngleRad} rad)`);
-    assert(samples[5].leftAngleRad >= 0.005,
-      `${definition.name}: steering authority collapsed at 150 km/h (${samples[5].leftAngleRad} rad)`);
+    const minimumRackAngles = [
+      [50, 0.1], [60, 0.075], [80, 0.045], [100, 0.03], [120, 0.02], [150, 0.012],
+    ];
+    for (const [speedKmh, minimumAngle] of minimumRackAngles) {
+      const sample = samples.find((entry) => entry.speedKmh === speedKmh);
+      assert(sample && sample.leftAngleRad >= minimumAngle,
+        `${definition.name}: steering rack authority below ${minimumAngle} rad at ${speedKmh} km/h (${sample?.leftAngleRad ?? 'missing'} rad)`);
+    }
     return { vehicle: definition.name, samples, result: 'PASS' };
   }
 

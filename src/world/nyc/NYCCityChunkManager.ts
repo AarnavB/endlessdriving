@@ -21,6 +21,7 @@ interface BuildingSpec {
   width: number;
   depth: number;
   height: number;
+  baseY: number;
   colour: THREE.Color;
 }
 interface CurbSpec {
@@ -105,7 +106,8 @@ export class NYCCityChunkManager {
   private disposed = false;
 
   private readonly groundMaterial = new THREE.MeshStandardMaterial({
-    color: 0x66705e, roughness: 1, metalness: 0, side: THREE.DoubleSide,
+    color: 0xffffff, roughness: 1, metalness: 0,
+    side: THREE.DoubleSide, vertexColors: true,
   });
   private readonly roadMaterial = new THREE.MeshStandardMaterial({
     color: 0x292e33, roughness: 0.94, metalness: 0.02, side: THREE.DoubleSide,
@@ -262,6 +264,37 @@ export class NYCCityChunkManager {
     this.treeGeometry.dispose();
   }
 
+  /**
+   * Spatially coherent, low-amplitude urban topography. The smooth fade keeps
+   * the graph-authored street grid level while block interiors follow broad
+   * deterministic landform contours. This is generated terrain, not claimed
+   * survey-grade New York elevation data.
+   */
+  private sampleTerrainHeight(worldX: number, worldZ: number): number {
+    const gridX = Math.round(worldX / CITY_BLOCK_SPACING_M);
+    const gridZ = Math.round(worldZ / CITY_BLOCK_SPACING_M);
+    const xRoadHalfWidth = this.graph.getRoadProfile('z', gridX).widthM * 0.5;
+    const zRoadHalfWidth = this.graph.getRoadProfile('x', gridZ).widthM * 0.5;
+    const xDistance = Math.abs(worldX - gridX * CITY_BLOCK_SPACING_M);
+    const zDistance = Math.abs(worldZ - gridZ * CITY_BLOCK_SPACING_M);
+    const xBlend = THREE.MathUtils.smoothstep(
+      xDistance,
+      xRoadHalfWidth + SIDEWALK_WIDTH_M + 2,
+      64,
+    );
+    const zBlend = THREE.MathUtils.smoothstep(
+      zDistance,
+      zRoadHalfWidth + SIDEWALK_WIDTH_M + 2,
+      64,
+    );
+    const blockBlend = Math.min(xBlend, zBlend);
+    const elevation =
+      1.4 * Math.sin(worldX / 560)
+      + 1.05 * Math.cos(worldZ / 480)
+      + 0.45 * Math.sin((worldX + worldZ) / 230);
+    return -0.405 + elevation * blockBlend;
+  }
+
   private getChunkIndex(position: THREE.Vector3): { x: number; z: number } {
     return {
       x: Math.floor((position.x + this.originOffset.x) / CITY_CHUNK_SIZE_M),
@@ -327,6 +360,7 @@ export class NYCCityChunkManager {
     group.position.set(centerX - this.originOffset.x, -this.originOffset.y, centerZ - this.originOffset.z);
 
     const groundPositions: number[] = [], groundIndices: number[] = [];
+    const groundColours: number[] = [];
     const roadPositions: number[] = [], roadIndices: number[] = [];
     const sidewalkPositions: number[] = [], sidewalkIndices: number[] = [];
     const whitePositions: number[] = [], whiteIndices: number[] = [];
@@ -343,8 +377,39 @@ export class NYCCityChunkManager {
     const pierSpecs: InstanceSpec[] = [];
     const capSpecs: InstanceSpec[] = [];
 
-    pushRect(groundPositions, groundIndices, centerX, centerZ,
-      minX, maxX, minZ, maxZ, -0.405);
+    // Deterministic heightfield: the mesh grid is aligned to world coordinates,
+    // so adjacent streamed chunks share identical edge samples. Ground-road
+    // corridors fade back to the established -0.405 m datum before the
+    // surrounding block parcels rise and fall.
+    const terrainStepM = 16;
+    const terrainCells = Math.round(CITY_CHUNK_SIZE_M / terrainStepM);
+    const terrainGrass = new THREE.Color(0x65715d);
+    const terrainSoil = new THREE.Color(0x807666);
+    const terrainColour = new THREE.Color();
+    for (let gridZ = 0; gridZ <= terrainCells; gridZ++) {
+      const worldZ = minZ + gridZ * terrainStepM;
+      for (let gridX = 0; gridX <= terrainCells; gridX++) {
+        const worldX = minX + gridX * terrainStepM;
+        const height = this.sampleTerrainHeight(worldX, worldZ);
+        groundPositions.push(worldX - centerX, height, worldZ - centerZ);
+
+        const elevationTint = THREE.MathUtils.clamp((height + 0.405 + 1.1) / 5.5, 0, 0.42);
+        const surfaceVariation = 0.95 + 0.05 * (
+          0.5 + 0.5 * Math.sin(worldX * 0.031 + worldZ * 0.023)
+        );
+        terrainColour.copy(terrainGrass).lerp(terrainSoil, elevationTint)
+          .multiplyScalar(surfaceVariation);
+        groundColours.push(terrainColour.r, terrainColour.g, terrainColour.b);
+
+        if (gridX < terrainCells && gridZ < terrainCells) {
+          const a = gridZ * (terrainCells + 1) + gridX;
+          const b = a + 1;
+          const d = (gridZ + 1) * (terrainCells + 1) + gridX;
+          const c = d + 1;
+          groundIndices.push(a, c, b, a, d, c);
+        }
+      }
+    }
 
     const firstX = Math.floor(minX / CITY_BLOCK_SPACING_M) - 1;
     const lastX = Math.ceil(maxX / CITY_BLOCK_SPACING_M) + 1;
@@ -446,6 +511,32 @@ export class NYCCityChunkManager {
 
     const geometries: THREE.BufferGeometry[] = [];
     const groundGeometry = makeGeometry(groundPositions, groundIndices);
+    if (groundGeometry) {
+      groundGeometry.setAttribute('color', new THREE.Float32BufferAttribute(groundColours, 3));
+      // Central-difference normals use global samples rather than one-sided
+      // chunk-edge normals, avoiding lighting seams between streamed tiles.
+      const terrainNormals = new Float32Array(groundPositions.length);
+      const normal = new THREE.Vector3();
+      for (let index = 0; index < groundPositions.length / 3; index++) {
+        const gridX = index % (terrainCells + 1);
+        const gridZ = Math.floor(index / (terrainCells + 1));
+        const worldX = minX + gridX * terrainStepM;
+        const worldZ = minZ + gridZ * terrainStepM;
+        const gradientX = (
+          this.sampleTerrainHeight(worldX + 1, worldZ)
+          - this.sampleTerrainHeight(worldX - 1, worldZ)
+        ) * 0.5;
+        const gradientZ = (
+          this.sampleTerrainHeight(worldX, worldZ + 1)
+          - this.sampleTerrainHeight(worldX, worldZ - 1)
+        ) * 0.5;
+        normal.set(-gradientX, 1, -gradientZ).normalize();
+        terrainNormals[index * 3] = normal.x;
+        terrainNormals[index * 3 + 1] = normal.y;
+        terrainNormals[index * 3 + 2] = normal.z;
+      }
+      groundGeometry.setAttribute('normal', new THREE.BufferAttribute(terrainNormals, 3));
+    }
     const roadGeometry = makeGeometry(roadPositions, roadIndices);
     const sidewalkGeometry = makeGeometry(sidewalkPositions, sidewalkIndices);
     const whiteGeometry = makeGeometry(whitePositions, whiteIndices);
@@ -456,7 +547,7 @@ export class NYCCityChunkManager {
     const elevatedWhiteGeometry = makeGeometry(elevatedWhitePositions, elevatedWhiteIndices);
     const elevatedYellowGeometry = makeGeometry(elevatedYellowPositions, elevatedYellowIndices);
     for (const [geometry, material, name] of [
-      [groundGeometry, this.groundMaterial, 'visible-city-block-ground'],
+      [groundGeometry, this.groundMaterial, 'terrain-heightfield'],
       [roadGeometry, this.roadMaterial, 'asphalt-road-network'],
       [sidewalkGeometry, this.sidewalkMaterial, 'raised-sidewalks'],
       [whiteGeometry, this.lineMaterial, 'lane-markings'],
@@ -484,7 +575,7 @@ export class NYCCityChunkManager {
     const rooftops: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
     for (let i = 0; i < buildingSpecs.length; i++) {
       const b = buildingSpecs[i];
-      setInstance(buildingMesh, i, b.x - centerX, b.height * 0.5, b.z - centerZ, b.width, b.height, b.depth, b.colour);
+      setInstance(buildingMesh, i, b.x - centerX, b.baseY + b.height * 0.5, b.z - centerZ, b.width, b.height, b.depth, b.colour);
       const floors = Math.min(25, Math.max(2, Math.floor(b.height / 3.6)));
       const colsX = Math.min(6, Math.max(2, Math.floor(b.width / 5)));
       const colsZ = Math.min(6, Math.max(2, Math.floor(b.depth / 5)));
@@ -500,36 +591,36 @@ export class NYCCityChunkManager {
         const x = b.x - centerX - b.width * 0.5 + 1.2 + (panel + 0.5) * shopWidthX;
         for (const side of [-1, 1]) {
           const z = b.z - centerZ + side * (b.depth * 0.5 + 0.055);
-          storefronts.push({ x, y: 1.72, z, w: shopWidthX - 0.55, h: 2.28, d: 0.09 });
-          storefrontFrames.push({ x, y: 0.55, z, w: shopWidthX - 0.3, h: 0.1, d: 0.16 });
-          storefrontFrames.push({ x, y: 2.88, z, w: shopWidthX - 0.3, h: 0.12, d: 0.16 });
+          storefronts.push({ x, y: 1.72 + b.baseY, z, w: shopWidthX - 0.55, h: 2.28, d: 0.09 });
+          storefrontFrames.push({ x, y: 0.55 + b.baseY, z, w: shopWidthX - 0.3, h: 0.1, d: 0.16 });
+          storefrontFrames.push({ x, y: 2.88 + b.baseY, z, w: shopWidthX - 0.3, h: 0.12, d: 0.16 });
         }
       }
       for (let panel = 0; panel < shopPanelsZ; panel++) {
         const z = b.z - centerZ - b.depth * 0.5 + 1.2 + (panel + 0.5) * shopWidthZ;
         for (const side of [-1, 1]) {
           const x = b.x - centerX + side * (b.width * 0.5 + 0.055);
-          storefronts.push({ x, y: 1.72, z, w: 0.09, h: 2.28, d: shopWidthZ - 0.55 });
-          storefrontFrames.push({ x, y: 0.55, z, w: 0.16, h: 0.1, d: shopWidthZ - 0.3 });
-          storefrontFrames.push({ x, y: 2.88, z, w: 0.16, h: 0.12, d: shopWidthZ - 0.3 });
+          storefronts.push({ x, y: 1.72 + b.baseY, z, w: 0.09, h: 2.28, d: shopWidthZ - 0.55 });
+          storefrontFrames.push({ x, y: 0.55 + b.baseY, z, w: 0.16, h: 0.1, d: shopWidthZ - 0.3 });
+          storefrontFrames.push({ x, y: 2.88 + b.baseY, z, w: 0.16, h: 0.12, d: shopWidthZ - 0.3 });
         }
       }
       // A restrained continuous sign band gives each block a retail datum
       // without inventing copied brand names or storefront text.
       for (const side of [-1, 1]) {
         retailSigns.push({
-          x: b.x - centerX, y: 3.18,
+          x: b.x - centerX, y: 3.18 + b.baseY,
           z: b.z - centerZ + side * (b.depth * 0.5 + 0.08),
           w: b.width * 0.72, h: 0.42, d: 0.12,
         });
         retailSigns.push({
-          x: b.x - centerX + side * (b.width * 0.5 + 0.08), y: 3.18,
+          x: b.x - centerX + side * (b.width * 0.5 + 0.08), y: 3.18 + b.baseY,
           z: b.z - centerZ, w: 0.12, h: 0.42, d: b.depth * 0.72,
         });
       }
 
       for (let floor = 1; floor < floors; floor++) {
-        const y = floor * 3.55;
+        const y = b.baseY + floor * 3.55;
         for (let col = 0; col < colsX; col++) {
           const x = b.x - centerX - b.width * 0.5 + (col + 0.5) * b.width / colsX;
           windows.push({ x, y, z: b.z - centerZ + b.depth * 0.5 + 0.045, w: 1.05, h: 1.25, d: 0.065 });
@@ -545,12 +636,12 @@ export class NYCCityChunkManager {
         // Grouped rooftop plant reads as HVAC/utility equipment from street level.
         for (const unit of [-1, 0, 1]) rooftops.push({
           x: b.x - centerX + b.width * 0.12 + unit * Math.min(5, b.width * 0.13),
-          y: b.height + 1.1,
+          y: b.baseY + b.height + 1.1,
           z: b.z - centerZ,
           w: Math.min(4.6, b.width * 0.2), h: 2.2, d: Math.min(4.8, b.depth * 0.18),
         });
         rooftops.push({
-          x: b.x - centerX - b.width * 0.18, y: b.height + 4.1,
+          x: b.x - centerX - b.width * 0.18, y: b.baseY + b.height + 4.1,
           z: b.z - centerZ + b.depth * 0.12, w: 0.24, h: 6.0, d: 0.24,
         });
       }
@@ -616,11 +707,14 @@ export class NYCCityChunkManager {
       .setCanSleep(true));
     // Visible base ground prevents the player and traffic from falling through
     // undeveloped block interiors; streets and sidewalks sit 0.4m above it.
+    // The shallow foundation remains as a fail-safe below the heightfield;
+    // the rendered terrain itself is the authoritative contact surface.
     this.physics.createCollider(
       RAPIER.ColliderDesc.cuboid(CITY_CHUNK_SIZE_M * 0.5, 0.18, CITY_CHUNK_SIZE_M * 0.5)
-        .setTranslation(0, -0.585, 0).setFriction(0.78),
+        .setTranslation(0, -4.585, 0).setFriction(0.78),
       body,
     );
+    if (groundGeometry) this.addTrimeshCollider(body, groundGeometry, 0.84);
     if (roadGeometry) this.addTrimeshCollider(body, roadGeometry, 0.96);
     if (sidewalkGeometry) this.addTrimeshCollider(body, sidewalkGeometry, 0.82);
     // Top and soffit collision surfaces are independent. The top catches
@@ -676,7 +770,7 @@ export class NYCCityChunkManager {
     for (const b of buildingSpecs) {
       this.physics.createCollider(
         RAPIER.ColliderDesc.cuboid(b.width * 0.5, b.height * 0.5, b.depth * 0.5)
-          .setTranslation(b.x - centerX, b.height * 0.5, b.z - centerZ)
+          .setTranslation(b.x - centerX, b.baseY + b.height * 0.5, b.z - centerZ)
           .setFriction(0.78).setRestitution(0),
         body,
       );
@@ -1048,6 +1142,7 @@ export class NYCCityChunkManager {
               width,
               depth,
               height: buildingHeight,
+              baseY: this.sampleTerrainHeight(buildingX, buildingZ),
               colour: colourForBuilding(style),
             });
           }
@@ -1071,7 +1166,7 @@ export class NYCCityChunkManager {
     for (let i = 0; i < 10; i++) {
       const x = (hash(cx * 10 + i, cz, this.graph.seed) % 380) - 190;
       const z = (hash(cx, cz * 10 + i, this.graph.seed) % 380) - 190;
-      setInstance(trees, i, x, 3, z, 2.7, 3.2, 2.7);
+      setInstance(trees, i, x, this.sampleTerrainHeight(cx + x, cz + z) + 3, z, 2.7, 3.2, 2.7);
     }
     group.add(trees);
   }
