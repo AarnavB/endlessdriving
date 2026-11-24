@@ -400,6 +400,9 @@ try {
     }
   }
 
+  // Rapier refreshes its broadphase/query pipeline during a world step.
+  // Step once after static chunk colliders are created before issuing rays.
+  physics.step();
   // Verify the same generated deck mesh supports highway traffic while a
   // second ray beginning below the soffit can still reach the ground street.
   const deckHit = physics.castRay(
