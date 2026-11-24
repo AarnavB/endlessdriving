@@ -22,7 +22,7 @@ The road graph currently models a flat urban network. Bridge-class corridors are
 
 ## Vehicle interaction improvements (branch update)
 
-- `N` requests neutral immediately from any forward ratio or the reverse-engagement state. The N key is handled as a non-text gameplay key; the HUD already exposes a clickable N selector.
+- `N` toggles neutral from any forward ratio or the reverse-engagement state. Manual mode restores the last selected forward ratio; automatic mode chooses a speed/load-appropriate ratio from the vehicle's torque curve and refuses a re-engagement that would exceed the calibrated redline. The keyboard and clickable HUD selector use the same toggle path.
 - Left/Right Shift now provide a clutch pedal axis (held = disengaged; released = engaged). A progressive bite curve controls clutch torque capacity; with a gear engaged, the crankshaft follows driveline RPM as the clutch locks. Near idle, the configured idle torque can produce actual wheel-force creep. This is a simplified single-plate clutch model, not a temperature/wear or multi-plate simulation.
 - Closed-throttle overrun torque is transmitted as negative force through the selected driveline ratio; the former coast-brake wheel impulse has been removed. Neutral and an open clutch isolate this overrun torque.
 - Space continues to command the rear-wheel handbrake using the Rapier wheel controller's per-wheel brake impulse. The HUD exposes active state.
