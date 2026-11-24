@@ -175,6 +175,12 @@ try {
     'chunk disposal releases colliders and chunk geometry');
   assert(/this\.originOffset\.add\(delta\)/.test(managerSource),
     'chunk coordinates preserve their global origin during rebasing');
+  assert(/street-level-retail-glazing/.test(managerSource)
+    && /street-level-retail-frames/.test(managerSource)
+    && /street-level-retail-sign-bands/.test(managerSource),
+    'generated block facades include instanced shopfront glazing, frames and retail sign bands');
+  assert(/arrow\.rotation\.z = Math\.PI/.test(trafficSource),
+    'protected arrows are oriented left in the rendered signal face');
 
   await RAPIER.init();
   physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -190,6 +196,11 @@ try {
   const initialChunks = manager.getDiagnostics();
   assert(initialChunks.activeChunks >= 1 && initialChunks.activeChunks <= 9,
     'chunk streamer loads the spawn chunk and remains within its bounded radius');
+  const spawnChunk = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
+  assert(spawnChunk?.getObjectByName('street-level-retail-glazing'),
+    'spawn chunk creates visible instanced ground-floor storefront glazing');
+  assert(spawnChunk?.getObjectByName('street-level-retail-sign-bands'),
+    'spawn chunk creates visible ground-floor retail sign fasciae');
 
   traffic = new TrafficSystem(physics, scene, graph, playerPosition);
   assert.equal(traffic.getDiagnostics().activeVehicles, 10, 'graph traffic creates its bounded vehicle pool');
@@ -250,7 +261,7 @@ try {
     runtimeChunksLoaded: initialChunks.activeChunks,
     trafficPool: 10,
     headlessPhysicsFrames: 120,
-    assertions: 44,
+    assertions: 47,
     result: 'PASS',
   }, null, 2));
 } finally {
