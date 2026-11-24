@@ -463,8 +463,14 @@ try {
     for (const speedKmh of speedsKmh) {
       const sim = createSimulation(definition, false, FIXED_DT);
       try {
+        sim.vehicle.selectGear(0);
         sim.vehicle.body.setLinvel({ x: 0, y: 0, z: speedKmh / 3.6 }, true);
-        sim.step({ ...NEUTRAL_INPUT, steer: 1 });
+        let sample;
+        // Let the speed-sensitive steering rack filter settle before sampling
+        // the physical wheel angle; the one-frame value is only a transient.
+        for (let frame = 0; frame < 36; frame++) {
+          sample = sim.step({ ...NEUTRAL_INPUT, steer: 1 });
+        }
         const controller = sim.vehicle.wheelController;
         const left = controller.wheelSteering(1) ?? 0;
         const right = controller.wheelSteering(3) ?? 0;
