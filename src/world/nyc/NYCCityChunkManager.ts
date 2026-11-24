@@ -182,10 +182,6 @@ function setInstance(
   mesh.setMatrixAt(index, matrix);
   if (colour) mesh.setColorAt(index, colour);
 }
-function colourForBuilding(style: number): THREE.Color {
-  const colours = [0x627985, 0x8b6556, 0xaaa69d, 0x765447, 0x59656a, 0x8b8b82];
-  return new THREE.Color(colours[style % colours.length]);
-}
 
 /**
  * Fictional Manhattan-inspired city mesh/collision streamer. This class
@@ -850,7 +846,7 @@ export class NYCCityChunkManager {
     }
 
     this.addStreetFurniture(
-      group, cx, cz, centerX, centerZ, chunkBounds,
+      group, centerX, centerZ, chunkBounds,
       propPlacementIndex, streetColliderSpecs, nightLights,
     );
     this.addBridgeInstances(group, centerX, centerZ, barrierSpecs, pierSpecs, capSpecs);
@@ -1333,8 +1329,6 @@ export class NYCCityChunkManager {
 
   private addStreetFurniture(
     group: THREE.Group,
-    cx: number,
-    cz: number,
     centerX: number,
     centerZ: number,
     chunkBounds: RibbonBounds,
@@ -1434,7 +1428,6 @@ export class NYCCityChunkManager {
 
     // Park blocks are open parcels selected by stable district rules. Trees are
     // confined to those reserved green-space footprints, with trunk colliders.
-    let treeCount = 0;
     for (let gx = firstGridX; gx < lastGridX; gx++) {
       const blockCentreX = (gx + 0.5) * CITY_BLOCK_SPACING_M;
       for (let gz = firstGridZ; gz < lastGridZ; gz++) {
