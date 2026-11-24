@@ -317,20 +317,69 @@ try {
         'Fully engaged clutch did not produce idle creep through the drivetrain',
       );
 
-      // Neutral is reachable from every forward gear through the same edge.
+      // N is a toggle from every forward gear in manual mode. The selected
+      // ratio must be restored exactly on the next N edge.
       for (let gear = 1; gear <= definition.physics.gearRatios.length; gear++) {
         sim.vehicle.selectGear(gear);
-        const sample = sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
-        assert.equal(sample.telemetry.gearLabel, 'N', `N failed from forward gear ${gear}`);
+        const neutral = sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
+        assert.equal(neutral.telemetry.gearLabel, 'N', `N failed from forward gear ${gear}`);
+        assert(Math.abs(neutral.debug.appliedForwardForce) < 1e-5,
+          `Neutral transmitted torque after entering from gear ${gear}`);
+        const restored = sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
+        assert.equal(restored.telemetry.gear, gear,
+          `N failed to restore manual gear ${gear} (restored ${restored.telemetry.gearLabel})`);
       }
 
       // Select reverse using the established standstill brake gesture, then
-      // verify N cancels the reverse state without sending another wheel force.
+      // verify N cancels reverse and the next N restores the stored forward
+      // ratio without retaining the reverse latch.
       sim.vehicle.selectGear(1);
       sim.vehicle.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       for (let i = 0; i < 32; i++) sim.step(BRAKE_INPUT);
       sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
       assert.equal(sim.vehicle.getTelemetry().gearLabel, 'N', 'N failed to cancel reverse selection');
+      const restoredAfterReverse = sim.step({ ...NEUTRAL_INPUT, neutralPressed: true });
+      assert.equal(restoredAfterReverse.telemetry.gear, 1,
+        'N did not restore first gear after cancelling reverse');
+      assert.equal(restoredAfterReverse.telemetry.gearLabel, '1',
+        'Reverse latch remained active after restoring the forward ratio');
+
+      // Automatic mode selects a mechanically safe, speed-appropriate ratio
+      // from neutral. Higher throttle demand must not choose a taller ratio.
+      function automaticGearAfterNeutral(speedKmh, throttle) {
+        const automatic = createSimulation(definition, false, FIXED_DT);
+        try {
+          automatic.vehicle.body.setLinvel({ x: 0, y: 0, z: speedKmh / 3.6 }, true);
+          const entered = automatic.step({
+            ...NEUTRAL_INPUT, throttle, neutralPressed: true,
+          });
+          assert.equal(entered.telemetry.gearLabel, 'N',
+            `Automatic N entry failed at ${speedKmh} km/h`);
+          const restored = automatic.step({
+            ...NEUTRAL_INPUT, throttle, neutralPressed: true,
+          });
+          assert(restored.telemetry.gear >= 1,
+            `Automatic neutral toggle did not choose a gear at ${speedKmh} km/h`);
+          const velocity = automatic.vehicle.body.linvel();
+          const roadSpeed = Math.hypot(velocity.x, velocity.z);
+          const wheelRpm = roadSpeed / (2 * Math.PI * definition.physics.wheelRadiusM) * 60;
+          const projectedRpm = wheelRpm
+            * definition.physics.gearRatios[restored.telemetry.gear - 1]
+            * definition.physics.finalDrive
+            * definition.physics.transferDrive;
+          assert(projectedRpm <= definition.maxRpm * 0.985 + 1,
+            `Automatic neutral restoration selected an over-revving gear at ${speedKmh} km/h (${projectedRpm.toFixed(0)} rpm)`);
+          return restored.telemetry.gear;
+        } finally {
+          automatic.dispose();
+        }
+      }
+      const automaticLowLoadGear = automaticGearAfterNeutral(100, 0);
+      const automaticHighLoadGear = automaticGearAfterNeutral(100, 1);
+      assert(automaticHighLoadGear <= automaticLowLoadGear,
+        `Automatic neutral restoration chose a taller gear at higher throttle demand (low-load=${automaticLowLoadGear}, high-load=${automaticHighLoadGear})`);
+      assert.equal(automaticGearAfterNeutral(10, 0), 1,
+        'Automatic neutral restoration should select first gear near standstill');
 
       // Engine braking must be a negative driveline force in gear and vanish in
       // neutral. Use matched speed and fixed-step simulations for comparison.
@@ -458,7 +507,7 @@ try {
   }
 
   function runSpeedSensitiveSteeringRegression(definition) {
-    const speedsKmh = [10, 50, 100];
+    const speedsKmh = [10, 30, 50, 80, 100, 150];
     const samples = [];
     for (const speedKmh of speedsKmh) {
       const sim = createSimulation(definition, false, FIXED_DT);
@@ -466,8 +515,8 @@ try {
         sim.vehicle.selectGear(0);
         sim.vehicle.body.setLinvel({ x: 0, y: 0, z: speedKmh / 3.6 }, true);
         let sample;
-        // Let the speed-sensitive steering rack filter settle before sampling
-        // the physical wheel angle; the one-frame value is only a transient.
+        // Allow the speed-sensitive rack filter to settle before measuring
+        // physical wheel angles.
         for (let frame = 0; frame < 36; frame++) {
           sample = sim.step({ ...NEUTRAL_INPUT, steer: 1 });
         }
@@ -484,25 +533,45 @@ try {
           Math.abs(sim.vehicle.wheelMeshes[3].steeringPivot.rotation.y - right) < 1e-4,
           `${definition.name}: right steering visual diverged at ${speedKmh} km/h`,
         );
-        assert(Math.abs(left) <= 0.34 && Math.abs(right) <= 0.34,
-          `${definition.name}: road-wheel angle exceeded rack calibration`);
+
+        // For a right turn, the right-front wheel is inside and must steer
+        // farther than the left-front outside wheel. Reconstruct the centre
+        // rack angle from both wheel radii instead of comparing either
+        // Ackermann road-wheel angle directly with the rack calibration.
+        const wheelbase = definition.visual.wheelBase;
+        const halfTrack = definition.visual.wheelTrack * 0.5;
+        const insideRadius = wheelbase / Math.tan(Math.abs(right));
+        const outsideRadius = wheelbase / Math.tan(Math.abs(left));
+        const reconstructedRackRadius = (insideRadius + outsideRadius) * 0.5;
+        const reconstructedRackAngle = Math.atan(wheelbase / reconstructedRackRadius);
+        assert(
+          Math.abs(reconstructedRackAngle) <= 0.34 + 1e-4,
+          `${definition.name}: reconstructed rack command exceeded calibration at ${speedKmh} km/h (${reconstructedRackAngle.toFixed(4)} rad)`,
+        );
+        assert(
+          Math.abs((outsideRadius - insideRadius) - definition.visual.wheelTrack) < 0.02,
+          `${definition.name}: Ackermann radii do not match the configured front track at ${speedKmh} km/h (inside=${insideRadius.toFixed(3)} m, outside=${outsideRadius.toFixed(3)} m)`,
+        );
         samples.push({
           speedKmh,
           leftAngleRad: Number(left.toFixed(4)),
           rightAngleRad: Number(right.toFixed(4)),
+          reconstructedRackAngleRad: Number(reconstructedRackAngle.toFixed(4)),
         });
       } finally {
         sim.dispose();
       }
     }
-    assert(samples[0].leftAngleRad > samples[1].leftAngleRad,
-      `${definition.name}: steering did not progressively reduce with speed`);
-    assert(samples[1].leftAngleRad > samples[2].leftAngleRad,
-      `${definition.name}: steering did not remain speed-sensitive at 100 km/h`);
-    assert(samples[1].leftAngleRad >= 0.1,
-      `${definition.name}: steering authority remained too low at 50 km/h (${samples[1].leftAngleRad} rad)`);
-    assert(samples[2].leftAngleRad >= 0.02,
-      `${definition.name}: steering authority collapsed at 100 km/h (${samples[2].leftAngleRad} rad)`);
+    for (let i = 1; i < samples.length; i++) {
+      assert(samples[i - 1].leftAngleRad > samples[i].leftAngleRad,
+        `${definition.name}: steering did not progressively reduce from ${samples[i - 1].speedKmh} to ${samples[i].speedKmh} km/h`);
+    }
+    assert(samples[2].leftAngleRad >= 0.1,
+      `${definition.name}: steering authority remained too low at 50 km/h (${samples[2].leftAngleRad} rad)`);
+    assert(samples[4].leftAngleRad >= 0.02,
+      `${definition.name}: steering authority collapsed at 100 km/h (${samples[4].leftAngleRad} rad)`);
+    assert(samples[5].leftAngleRad >= 0.005,
+      `${definition.name}: steering authority collapsed at 150 km/h (${samples[5].leftAngleRad} rad)`);
     return { vehicle: definition.name, samples, result: 'PASS' };
   }
 
