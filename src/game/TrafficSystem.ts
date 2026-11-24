@@ -254,6 +254,9 @@ export class TrafficSystem {
     amber.position.set(0, 0.02, 0.245);
     green.position.set(0, -0.54, 0.245);
     const arrow = new THREE.Mesh(this.signalArrowGeometry, approach.arrowMaterial);
+    // The arrow is a left-turn arrow in the driver's signal face, not a
+    // generic right-pointing decorative chevron.
+    arrow.rotation.z = Math.PI;
     arrow.position.set(0, -0.79, 0.245);
     head.add(housing, red, amber, green, arrow);
     root.add(pole, head);
