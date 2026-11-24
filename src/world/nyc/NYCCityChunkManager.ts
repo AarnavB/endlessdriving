@@ -1366,15 +1366,16 @@ export class NYCCityChunkManager {
         if (x < chunkBounds.minX || x >= chunkBounds.maxX
           || alongZ < chunkBounds.minZ || alongZ >= chunkBounds.maxZ) continue;
         if (!reserve('lamp:x:' + gx + ':' + gz, x, alongZ, 0.42, 'streetlight')) continue;
+        const groundY = this.sampleTerrainHeight(x, alongZ);
         poleSpecs.push({
-          position: new THREE.Vector3(x, 3.1, alongZ),
+          position: new THREE.Vector3(x, groundY + 3.1, alongZ),
           rotation: new THREE.Quaternion(),
           scale: new THREE.Vector3(0.15, 6.2, 0.15),
         });
         if ((citySpatialHash(gx, gz, this.graph.seed ^ 0x31a) % 4) === 0) {
           const light = new THREE.PointLight(0xffd2a0, 0, 30, 2);
           light.name = 'streetlight-point-source';
-          light.position.set(x - centerX, 5.85, alongZ - centerZ);
+          light.position.set(x - centerX, groundY + 5.85, alongZ - centerZ);
           light.visible = false;
           group.add(light);
           nightLights.push(light);
@@ -1391,15 +1392,16 @@ export class NYCCityChunkManager {
         if (alongX < chunkBounds.minX || alongX >= chunkBounds.maxX
           || z < chunkBounds.minZ || z >= chunkBounds.maxZ) continue;
         if (!reserve('lamp:z:' + gx + ':' + gz, alongX, z, 0.42, 'streetlight')) continue;
+        const groundY = this.sampleTerrainHeight(alongX, z);
         poleSpecs.push({
-          position: new THREE.Vector3(alongX, 3.1, z),
+          position: new THREE.Vector3(alongX, groundY + 3.1, z),
           rotation: new THREE.Quaternion(),
           scale: new THREE.Vector3(0.15, 6.2, 0.15),
         });
         if ((citySpatialHash(gx, gz, this.graph.seed ^ 0x31a) % 4) === 0) {
           const light = new THREE.PointLight(0xffd2a0, 0, 30, 2);
           light.name = 'streetlight-point-source';
-          light.position.set(alongX - centerX, 5.85, z - centerZ);
+          light.position.set(alongX - centerX, groundY + 5.85, z - centerZ);
           light.visible = false;
           group.add(light);
           nightLights.push(light);
@@ -1416,7 +1418,7 @@ export class NYCCityChunkManager {
           pole.position.x - centerX, pole.position.y, pole.position.z - centerZ,
           pole.scale.x, pole.scale.y, pole.scale.z);
         setInstance(lamps, i,
-          pole.position.x - centerX, 6.25, pole.position.z - centerZ,
+          pole.position.x - centerX, pole.position.y + 3.15, pole.position.z - centerZ,
           0.42, 0.24, 0.42);
         colliderSpecs.push(pole);
       }
