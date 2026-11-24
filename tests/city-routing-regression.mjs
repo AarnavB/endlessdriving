@@ -334,6 +334,9 @@ try {
   assert(/underpass-west-retaining-wall-north/.test(managerSource)
     && /underpass-west-retaining-wall-south/.test(managerSource),
     'underpass retaining walls leave the transverse at-grade crossing clear');
+  assert(/rightOfWaySegments/.test(managerSource)
+    && /intersectsElevatedRightOfWay/.test(managerSource),
+    'procedural building placement reserves clear footprints for elevated roads and ramps');
   assert(/removeRigidBody\(chunk\.body\)/.test(managerSource) && /geometry\.dispose\(\)/.test(managerSource),
     'chunk disposal releases colliders and chunk geometry');
   assert(/this\.originOffset\.add\(delta\)/.test(managerSource),
@@ -365,6 +368,46 @@ try {
   const initialChunks = manager.getDiagnostics();
   assert(initialChunks.activeChunks >= 1 && initialChunks.activeChunks <= 9,
     'chunk streamer loads the spawn chunk and remains within its bounded radius');
+
+  // The remote ramp has a right-of-way through the procedural block plan.
+  // The manager's private method is TypeScript-private (not a JS # member),
+  // allowing a direct deterministic assertion without mutating the scene.
+  const remoteRampBuildings = manager.collectBuildings(1280, 1792, 0, 512);
+  const remoteRampSegments = graph.getSpecialSegmentsInBounds(1200, 1872, 280, 440)
+    .filter((segment) => segment.id.startsWith('nyc:ramp:8:'));
+  assert(remoteRampSegments.length >= 3, 'remote interchange has all three ramp curve segments');
+  for (const building of remoteRampBuildings) {
+    for (const segment of remoteRampSegments) {
+      const points = [segment.start, segment.end, ...(segment.controlPoints ?? [])];
+      const margin = segment.profile.widthM * 0.5 + 1;
+      const roadMinX = Math.min(...points.map((point) => point.x)) - margin;
+      const roadMaxX = Math.max(...points.map((point) => point.x)) + margin;
+      const roadMinZ = Math.min(...points.map((point) => point.z)) - margin;
+      const roadMaxZ = Math.max(...points.map((point) => point.z)) + margin;
+      const buildingMinX = building.x - building.width * 0.5;
+      const buildingMaxX = building.x + building.width * 0.5;
+      const buildingMinZ = building.z - building.depth * 0.5;
+      const buildingMaxZ = building.z + building.depth * 0.5;
+      assert(!(roadMaxX >= buildingMinX && roadMinX <= buildingMaxX
+        && roadMaxZ >= buildingMinZ && roadMinZ <= buildingMaxZ),
+      'procedural buildings do not occupy the remote ramp swept footprint');
+    }
+  }
+
+  // Verify the same generated deck mesh supports highway traffic while a
+  // second ray beginning below the soffit can still reach the ground street.
+  const deckHit = physics.castRay(
+    new RAPIER.Ray({ x: 100, y: 12, z: 320 }, { x: 0, y: -1, z: 0 }),
+    20, true,
+  );
+  assert(deckHit && Math.abs(deckHit.timeOfImpact - 4.8) < 0.45,
+    'elevated road collider presents the deck surface at its rendered elevation');
+  const underDeckHit = physics.castRay(
+    new RAPIER.Ray({ x: 100, y: 4, z: 320 }, { x: 0, y: -1, z: 0 }),
+    8, true,
+  );
+  assert(underDeckHit && underDeckHit.timeOfImpact > 3.5 && underDeckHit.timeOfImpact < 4.5,
+    'a ground-level ray beneath the deck reaches the street without hitting the soffit');
   const spawnChunk = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
   assert(spawnChunk?.getObjectByName('street-level-retail-glazing'),
     'spawn chunk creates visible instanced ground-floor storefront glazing');
