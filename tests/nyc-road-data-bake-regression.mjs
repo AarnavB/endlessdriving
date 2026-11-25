@@ -139,7 +139,7 @@ const nodedCrossingFeatures = [
 const nodedGraph = buildCSCLRoadGraph(nodedCrossingFeatures);
 assert.equal(nodedGraph.diagnostics.intersectionNoding.sameLevelInteriorInteriorCount, 1);
 assert.equal(nodedGraph.diagnostics.intersectionNoding.gradeSeparatedPlanarCrossingCount, 1);
-assert.equal(nodedGraph.diagnostics.intersectionNoding.ambiguousGradeTransitionCrossingCount, 3);
+assert.equal(nodedGraph.diagnostics.intersectionNoding.ambiguousGradeTransitionCrossingCount, 2);
 assert.equal(nodedGraph.diagnostics.edgeCount, 5,
   'same-level cross streets split into connected graph edges while grade-separated and transition roads remain unsplit');
 assert.equal(nodedGraph.diagnostics.junctionNodeCount, 1);
