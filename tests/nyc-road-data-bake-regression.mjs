@@ -89,6 +89,6 @@ assert.deepEqual(network.features.map((item) => item.id), ['71', '72'],
 
 console.log(JSON.stringify({
   suite: 'NYC CSCL offline-bake normalization regression',
-  assertions: 29,
+  assertions: 31,
   result: 'PASS',
 }));
