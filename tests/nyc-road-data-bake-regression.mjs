@@ -138,7 +138,10 @@ const network = buildBakedStreetNetwork([
   makeFeature({ objectid: 72, rw_type: '2', trafdir: 'FT', st_width: '80' }),
   makeFeature({ objectid: 73, status: '4' }),
 ], { north: 40.83, south: 40.69, east: -73.92, west: -74.05 }, '2026-11-24T00:00:00.000Z');
-assert.equal(network.schemaVersion, 2);
+assert.equal(network.schemaVersion, 3);
+assert.equal(network.graph.schemaVersion, 1);
+assert.equal(network.graph.diagnostics.edgeCount, 2);
+assert.equal(network.graph.diagnostics.connectedComponentCount, 1);
 assert.equal(network.coordinateFrame.name, 'local-ENU');
 assert.equal(network.coordinateFrame.verticalAxis, 'source third ordinate in metres; 2D coordinates use 0; not a terrain elevation model');
 assert.equal(network.sourceFieldDiagnostics.attributes.streetName.nonNullFeatures, 3);
@@ -154,6 +157,6 @@ assert.deepEqual(network.features.map((item) => item.id), ['71', '72'],
 
 console.log(JSON.stringify({
   suite: 'NYC CSCL offline-bake normalization regression',
-  assertions: 54,
+  assertions: 57,
   result: 'PASS',
 }));
