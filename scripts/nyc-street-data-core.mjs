@@ -338,18 +338,20 @@ function splitPolylineAtDistances(path, splitDistances) {
     const endDistance = cumulative + length;
 
     while (splitIndex < distances.length
-      && distances[splitIndex] < endDistance - 1e-6) {
+      && distances[splitIndex] <= endDistance + 1e-6) {
       const splitDistance = distances[splitIndex];
-      if (splitDistance > cumulative + 1e-6) {
-        const t = (splitDistance - cumulative) / length;
+      if (splitDistance >= cumulative - 1e-6) {
+        const t = Math.max(0, Math.min(1, (splitDistance - cumulative) / length));
         const point = {
           x: a.x + (b.x - a.x) * t,
           y: a.y + (b.y - a.y) * t,
           z: a.z + (b.z - a.z) * t,
         };
         append(current, point);
-        if (current.length >= 2) output.push(current);
-        current = [{ ...point }];
+        if (current.length >= 2) {
+          output.push(current);
+          current = [{ ...point }];
+        }
       }
       splitIndex++;
     }

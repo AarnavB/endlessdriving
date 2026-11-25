@@ -157,6 +157,17 @@ assert.equal(teeGraph.diagnostics.edgeCount, 3);
 assert.equal(teeGraph.diagnostics.junctionNodeCount, 1);
 assert.equal(teeGraph.diagnostics.connectedComponentCount, 1);
 
+const vertexTGraph = buildCSCLRoadGraph([
+  { id: 'vertex-through', trafficDirection: 'TW', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 20, y: 0, z: 0 }]] },
+  { id: 'vertex-tee', trafficDirection: 'FT', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 10, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }]] },
+]);
+assert.equal(vertexTGraph.diagnostics.intersectionNoding.sameLevelEndpointInteriorCount, 1,
+  'an intersection exactly on an existing source vertex is still noded');
+assert.equal(vertexTGraph.diagnostics.edgeCount, 3);
+assert.equal(vertexTGraph.diagnostics.junctionNodeCount, 1);
+
 const directedGraph = buildCSCLRoadGraph(graphFeatures);
 assert.equal(directedGraph.diagnostics.edgeCount, 4);
 assert.equal(directedGraph.diagnostics.connectedComponentCount, 2,
@@ -197,6 +208,6 @@ assert.deepEqual(network.features.map((item) => item.id), ['71', '72'],
 
 console.log(JSON.stringify({
   suite: 'NYC CSCL offline-bake normalization regression',
-  assertions: 68,
+  assertions: 71,
   result: 'PASS',
 }));
