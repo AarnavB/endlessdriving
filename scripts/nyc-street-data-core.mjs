@@ -81,6 +81,7 @@ function readProperty(properties, ...names) {
 }
 
 function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -140,13 +141,20 @@ export function normalizeCSCLFeature(feature, fallbackIndex = 0) {
   const physicalId = readProperty(properties, 'physicalid');
   const segmentId = readProperty(properties, 'segmentid');
   const sourceId = objectId ?? segmentId ?? physicalId ?? feature.id ?? fallbackIndex;
-  const widthFeet = finiteNumber(readProperty(properties, 'st_width', 'street_width', 'paved_width', 'stwidth'));
+  const widthFeet = finiteNumber(readProperty(
+    properties, 'streetwidth', 'streetwidth_min', 'st_width', 'street_width', 'paved_width', 'stwidth',
+  ));
   const widthM = widthFeet !== null && widthFeet > 0 ? widthFeet * 0.3048 : null;
   const streetName = readProperty(
     properties, 'stname_label', 'stname_lab', 'st_label', 'st_name', 'streetname', 'street_name', 'name',
   );
-  const fromLevelCode = finiteNumber(readProperty(properties, 'frm_lvl_co', 'from_lvl_co', 'from_level'));
-  const toLevelCode = finiteNumber(readProperty(properties, 'to_lvl_co', 'to_level'));
+  const fromLevelCode = finiteNumber(readProperty(
+    properties, 'from_level_code', 'frm_lvl_co', 'from_lvl_co', 'from_level',
+  ));
+  const toLevelCode = finiteNumber(readProperty(properties, 'to_level_code', 'to_lvl_co', 'to_level'));
+  const numberTravelLanes = finiteNumber(readProperty(properties, 'number_travel_lanes'));
+  const numberTotalLanes = finiteNumber(readProperty(properties, 'number_total_lanes'));
+  const postedSpeed = finiteNumber(readProperty(properties, 'posted_speed'));
 
   return {
     feature: {
@@ -158,6 +166,9 @@ export function normalizeCSCLFeature(feature, fallbackIndex = 0) {
       trafficDirection,
       fromLevelCode,
       toLevelCode,
+      numberTravelLanes,
+      numberTotalLanes,
+      postedSpeed,
       widthM,
       bikeLane: readProperty(properties, 'bike_lane'),
       paths,
@@ -196,9 +207,12 @@ export function summarizeCSCLSourceFields(features) {
     propertyNames,
     attributes: {
       streetName: resolve('stname_label', 'stname_lab', 'st_label', 'st_name', 'streetname', 'street_name', 'name'),
-      widthFeet: resolve('st_width', 'street_width', 'paved_width', 'stwidth'),
-      fromLevelCode: resolve('frm_lvl_co', 'from_lvl_co', 'from_level'),
-      toLevelCode: resolve('to_lvl_co', 'to_level'),
+      widthFeet: resolve('streetwidth', 'streetwidth_min', 'st_width', 'street_width', 'paved_width', 'stwidth'),
+      fromLevelCode: resolve('from_level_code', 'frm_lvl_co', 'from_lvl_co', 'from_level'),
+      toLevelCode: resolve('to_level_code', 'to_lvl_co', 'to_level'),
+      numberTravelLanes: resolve('number_travel_lanes'),
+      numberTotalLanes: resolve('number_total_lanes'),
+      postedSpeed: resolve('posted_speed'),
     },
   };
 }

@@ -54,11 +54,20 @@ assert.equal(normalized.feature.toLevelCode, 14);
 assert(Math.abs(normalized.feature.widthM - 12.192) < 1e-9,
   'paved width is converted from feet to metres');
 const aliased = normalizeCSCLFeature(makeFeature({
-  st_label: null, stname_label: 'WEST 42 STREET', st_width: null, street_width: '50',
+  st_label: null, stname_label: 'WEST 42 STREET', st_width: null, streetwidth: '50',
+  frm_lvl_co: null, to_lvl_co: null, from_level_code: '14', to_level_code: '13',
 }));
 assert.equal(aliased.feature.streetName, 'WEST 42 STREET');
 assert(Math.abs(aliased.feature.widthM - 15.24) < 1e-9,
-  'alternate source field names are normalized when supplied');
+  'the current CSCL paved-width field is converted from feet to metres');
+assert.equal(aliased.feature.fromLevelCode, 14);
+assert.equal(aliased.feature.toLevelCode, 13);
+const missingAttributes = normalizeCSCLFeature(makeFeature({
+  st_width: null, frm_lvl_co: null, to_lvl_co: null,
+}));
+assert.equal(missingAttributes.feature.widthM, null);
+assert.equal(missingAttributes.feature.fromLevelCode, null);
+assert.equal(missingAttributes.feature.toLevelCode, null);
 
 assert.equal(normalized.feature.paths.length, 1);
 assert.equal(normalized.feature.paths[0].length, 3,
@@ -78,8 +87,10 @@ const network = buildBakedStreetNetwork([
 assert.equal(network.schemaVersion, 2);
 assert.equal(network.coordinateFrame.name, 'local-ENU');
 assert.equal(network.coordinateFrame.verticalAxis, 'source third ordinate in metres; 2D coordinates use 0; not a terrain elevation model');
-assert.equal(network.sourceFieldDiagnostics.attributes.streetName.nonNullFeatures, 1);
-assert.equal(network.sourceFieldDiagnostics.attributes.widthFeet.nonNullFeatures, 2);
+assert.equal(network.sourceFieldDiagnostics.attributes.streetName.nonNullFeatures, 3);
+assert.equal(network.sourceFieldDiagnostics.attributes.widthFeet.nonNullFeatures, 3);
+assert.equal(network.sourceFieldDiagnostics.attributes.fromLevelCode.nonNullFeatures, 3);
+assert.equal(network.sourceFieldDiagnostics.attributes.toLevelCode.nonNullFeatures, 3);
 assert.equal(network.counts.sourceFeatures, 3);
 assert.equal(network.counts.retainedFeatures, 2);
 assert.equal(network.counts.rejectedByReason['not-constructed'], 1);
@@ -89,6 +100,6 @@ assert.deepEqual(network.features.map((item) => item.id), ['71', '72'],
 
 console.log(JSON.stringify({
   suite: 'NYC CSCL offline-bake normalization regression',
-  assertions: 31,
+  assertions: 36,
   result: 'PASS',
 }));
