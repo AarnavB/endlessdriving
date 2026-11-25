@@ -581,13 +581,7 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       }
     }
 
-    if (best) {
-      best.sampleCount++;
-      best.position.x += (point.x - best.position.x) / best.sampleCount;
-      best.position.y += (point.y - best.position.y) / best.sampleCount;
-      best.position.z += (point.z - best.position.z) / best.sampleCount;
-      return best;
-    }
+    if (best) return best;
 
     const baseId = 'cscl-node:' + Math.round(point.x * 100)
       + ':' + Math.round(point.z * 100) + ':' + identity;
@@ -598,7 +592,6 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       id,
       position: { x: point.x, y: point.y, z: point.z },
       levelCode: Number.isInteger(levelCode) ? levelCode : null,
-      sampleCount: 1,
       loopCount: 0,
       incidentEdgeIds: [],
       incomingEdgeIds: [],
@@ -632,6 +625,10 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       if (!Array.isArray(path) || path.length < 2) continue;
       const from = getOrCreateNode(path[0], feature.fromLevelCode);
       const to = getOrCreateNode(path.at(-1), feature.toLevelCode);
+      // Endpoint clustering is authoritative for both topology and geometry:
+      // move the actual centerline endpoints onto the canonical shared node.
+      path[0] = { ...from.position };
+      path[path.length - 1] = { ...to.position };
       const allowedDirections = directions(feature.trafficDirection);
       const directionality = allowedDirections.length === 2 ? 'both'
         : allowedDirections.length === 1 ? allowedDirections[0] : 'unknown';
@@ -682,7 +679,6 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
   for (const node of nodes.values()) {
     node.degree = node.incidentEdgeIds.length + node.loopCount;
     degreeHistogram[node.degree] = (degreeHistogram[node.degree] ?? 0) + 1;
-    delete node.sampleCount;
     delete node.loopCount;
   }
 

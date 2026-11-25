@@ -168,6 +168,18 @@ assert.equal(vertexTGraph.diagnostics.intersectionNoding.sameLevelEndpointInteri
 assert.equal(vertexTGraph.diagnostics.edgeCount, 3);
 assert.equal(vertexTGraph.diagnostics.junctionNodeCount, 1);
 
+const endpointSnapFeatures = [
+  { id: 'snap-a', trafficDirection: 'TW', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }]] },
+  { id: 'snap-b', trafficDirection: 'FT', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 10.2, y: 0, z: 0.1 }, { x: 20, y: 0, z: 0.1 }]] },
+];
+const endpointSnapGraph = buildCSCLRoadGraph(endpointSnapFeatures);
+assert.equal(endpointSnapGraph.diagnostics.connectedComponentCount, 1);
+assert.deepEqual(endpointSnapFeatures[1].paths[0][0], endpointSnapGraph.nodes.find(
+  (node) => node.id === endpointSnapGraph.edges.find((edge) => edge.sourceFeatureId === 'snap-a').toNodeId,
+).position, 'nearby endpoint geometry is snapped to the same canonical node used by the graph');
+
 const directedGraph = buildCSCLRoadGraph(graphFeatures);
 assert.equal(directedGraph.diagnostics.edgeCount, 4);
 assert.equal(directedGraph.diagnostics.connectedComponentCount, 2,
@@ -208,6 +220,6 @@ assert.deepEqual(network.features.map((item) => item.id), ['71', '72'],
 
 console.log(JSON.stringify({
   suite: 'NYC CSCL offline-bake normalization regression',
-  assertions: 71,
+  assertions: 73,
   result: 'PASS',
 }));
