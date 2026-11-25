@@ -7,7 +7,9 @@ const graph = network.graph;
 assert.equal(network.schema, 'endless-driving.nyc-street-network');
 assert.equal(network.schemaVersion, 3);
 assert.equal(graph.schemaVersion, 1);
-assert.equal(graph.topologySource, 'NYC CSCL PHYSICALID intersection-to-intersection centerlines');
+assert.equal(graph.topologySource, 'NYC CSCL source line-feature endpoints with same-level planar intersection noding');
+assert(graph.diagnostics.intersectionNoding.sameLevelEndpointInteriorCount > 0);
+assert(graph.diagnostics.intersectionNoding.sameLevelInteriorInteriorCount > 0);
 assert(Array.isArray(graph.nodes) && graph.nodes.length > 0);
 assert(Array.isArray(graph.edges) && graph.edges.length > 0);
 assert.equal(graph.diagnostics.nodeCount, graph.nodes.length);
@@ -54,6 +56,7 @@ console.log(JSON.stringify({
   edgeCount: graph.diagnostics.edgeCount,
   connectedComponentCount: graph.diagnostics.connectedComponentCount,
   largestComponentShare: graph.diagnostics.largestComponentShare,
+  intersectionNoding: graph.diagnostics.intersectionNoding,
   oneWayEdgeCount: graph.diagnostics.oneWayEdgeCount,
   twoWayEdgeCount: graph.diagnostics.twoWayEdgeCount,
   result: 'PASS',

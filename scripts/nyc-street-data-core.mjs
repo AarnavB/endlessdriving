@@ -228,6 +228,7 @@ export function normalizeCSCLFeature(feature, fallbackIndex = 0) {
       widthM,
       bikeLane: readProperty(properties, 'bike_lane'),
       sourcePathPartCount: pathMerge.sourcePathPartCount,
+      sourceDisconnectedPathCount: Math.max(0, pathMerge.paths.length - 1),
       mergedPathPartCount: pathMerge.mergedPathPartCount,
       reversedPartCount: pathMerge.reversedPartCount,
       paths,
@@ -277,20 +278,273 @@ export function summarizeCSCLSourceFields(features) {
 }
 
 /**
- * Build a directed endpoint graph from CSCL intersection-to-intersection
- * physical centerlines. Only source segment endpoints are snapped. Interior
- * line crossings are never connected simply because they are nearby.
+ * Build a directed topological graph from CSCL physical centerline geometry.
+ * Source segment endpoints are snapped and reliable same-level intersections
+ * are noded; interior crossings are never joined by proximity alone.
  *
  * FT follows source centerline/address-range direction, TF reverses it, and
  * TW allows both directions. Source level codes keep grade-separated
  * endpoints from becoming the same junction.
  */
+function cross2(ax, az, bx, bz) {
+  return ax * bz - az * bx;
+}
+
+function segmentIntersectionXZ(a, b, c, d) {
+  const rx = b.x - a.x;
+  const rz = b.z - a.z;
+  const sx = d.x - c.x;
+  const sz = d.z - c.z;
+  const denominator = cross2(rx, rz, sx, sz);
+  if (Math.abs(denominator) < 1e-9) return null;
+  const qx = c.x - a.x;
+  const qz = c.z - a.z;
+  const t = cross2(qx, qz, sx, sz) / denominator;
+  const u = cross2(qx, qz, rx, rz) / denominator;
+  const epsilon = 1e-8;
+  if (t < -epsilon || t > 1 + epsilon || u < -epsilon || u > 1 + epsilon) return null;
+  const ta = Math.max(0, Math.min(1, t));
+  const tb = Math.max(0, Math.min(1, u));
+  return {
+    t: ta,
+    u: tb,
+    x: a.x + rx * ta,
+    z: a.z + rz * ta,
+    yA: a.y + (b.y - a.y) * ta,
+    yB: c.y + (d.y - c.y) * tb,
+  };
+}
+
+function splitPolylineAtDistances(path, splitDistances) {
+  if (splitDistances.length === 0) return [path];
+  const distances = [...splitDistances].sort((a, b) => a - b)
+    .filter((distance, index, values) =>
+      index === 0 || distance - values[index - 1] > 0.15);
+  const output = [];
+  let current = [{ ...path[0] }];
+  let cumulative = 0;
+  let splitIndex = 0;
+
+  const append = (target, point) => {
+    const last = target.at(-1);
+    if (!last || pointDistance(last, point) > 0.001) target.push({ ...point });
+  };
+
+  for (let index = 1; index < path.length; index++) {
+    const a = path[index - 1];
+    const b = path[index];
+    const length = pointDistance(a, b);
+    if (length <= 1e-6) continue;
+    const endDistance = cumulative + length;
+
+    while (splitIndex < distances.length
+      && distances[splitIndex] < endDistance - 1e-6) {
+      const splitDistance = distances[splitIndex];
+      if (splitDistance > cumulative + 1e-6) {
+        const t = (splitDistance - cumulative) / length;
+        const point = {
+          x: a.x + (b.x - a.x) * t,
+          y: a.y + (b.y - a.y) * t,
+          z: a.z + (b.z - a.z) * t,
+        };
+        append(current, point);
+        if (current.length >= 2) output.push(current);
+        current = [{ ...point }];
+      }
+      splitIndex++;
+    }
+
+    append(current, b);
+    cumulative = endDistance;
+  }
+
+  if (current.length >= 2) output.push(current);
+  return output.length > 0 ? output : [path];
+}
+
+/**
+ * Node only reliable same-level centreline intersections. The spatial hash
+ * limits tests to segments whose XY bounds share a 128 m cell. Grade-changing
+ * roads are excluded from interior noding because CSCL supplies endpoint
+ * level codes but not the vertical profile at an arbitrary interior point.
+ */
+export function nodeCSCLIntersections(features, options = {}) {
+  if (!Array.isArray(features)) throw new TypeError('CSCL features must be an array.');
+  const cellSizeM = options.cellSizeM ?? 128;
+  const endpointToleranceM = options.endpointToleranceM ?? 0.75;
+  const verticalToleranceM = options.verticalToleranceM ?? 0.75;
+  if (![cellSizeM, endpointToleranceM, verticalToleranceM].every(Number.isFinite)
+    || cellSizeM < 16 || endpointToleranceM <= 0 || endpointToleranceM > 2
+    || verticalToleranceM <= 0 || verticalToleranceM > 2) {
+    throw new RangeError('Invalid CSCL intersection-noding tolerances.');
+  }
+
+  const segments = [];
+  const cells = new Map();
+  const testedPairs = new Set();
+  const splits = new Map();
+  let candidateSegmentPairCount = 0;
+  let gradeSeparatedPlanarCrossingCount = 0;
+  let ambiguousGradeTransitionCrossingCount = 0;
+  let verticalMismatchCrossingCount = 0;
+  let sameLevelEndpointEndpointCount = 0;
+  let sameLevelEndpointInteriorCount = 0;
+  let sameLevelInteriorInteriorCount = 0;
+  let splitPathCount = 0;
+  let generatedPieceCount = 0;
+
+  const levelForFeature = (feature) => {
+    const from = feature.fromLevelCode;
+    const to = feature.toLevelCode;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from === 99 || to === 99) return null;
+    return from === to ? from : null;
+  };
+  const keyForCell = (x, z) => x + ':' + z;
+  const keyForPath = (featureIndex, pathIndex) => featureIndex + ':' + pathIndex;
+
+  for (let featureIndex = 0; featureIndex < features.length; featureIndex++) {
+    const feature = features[featureIndex];
+    const levelCode = levelForFeature(feature);
+    for (let pathIndex = 0; pathIndex < feature.paths.length; pathIndex++) {
+      const path = feature.paths[pathIndex];
+      const cumulative = [0];
+      for (let pointIndex = 1; pointIndex < path.length; pointIndex++) {
+        cumulative.push(cumulative.at(-1) + pointDistance(path[pointIndex - 1], path[pointIndex]));
+      }
+      const pathLength = cumulative.at(-1);
+      for (let segmentIndex = 1; segmentIndex < path.length; segmentIndex++) {
+        const a = path[segmentIndex - 1];
+        const b = path[segmentIndex];
+        if (pointDistance(a, b) < 0.01) continue;
+        const entry = {
+          id: segments.length,
+          featureIndex, pathIndex, segmentIndex: segmentIndex - 1,
+          levelCode, a, b,
+          cumulativeStartM: cumulative[segmentIndex - 1],
+          pathLengthM: pathLength,
+          minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x),
+          minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z),
+        };
+        segments.push(entry);
+        const minCellX = Math.floor(entry.minX / cellSizeM);
+        const maxCellX = Math.floor(entry.maxX / cellSizeM);
+        const minCellZ = Math.floor(entry.minZ / cellSizeM);
+        const maxCellZ = Math.floor(entry.maxZ / cellSizeM);
+        for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+          for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+            const key = keyForCell(cellX, cellZ);
+            const bucket = cells.get(key) ?? [];
+            for (const otherId of bucket) {
+              const other = segments[otherId];
+              if (other.featureIndex === entry.featureIndex) continue;
+              if (entry.maxX < other.minX - 1e-6 || entry.minX > other.maxX + 1e-6
+                || entry.maxZ < other.minZ - 1e-6 || entry.minZ > other.maxZ + 1e-6) continue;
+              const pairKey = otherId + ':' + entry.id;
+              if (testedPairs.has(pairKey)) continue;
+              testedPairs.add(pairKey);
+              candidateSegmentPairCount++;
+
+              const intersection = segmentIntersectionXZ(other.a, other.b, entry.a, entry.b);
+              if (!intersection) continue;
+              if (other.levelCode === null || entry.levelCode === null) {
+                ambiguousGradeTransitionCrossingCount++;
+                continue;
+              }
+              if (other.levelCode !== entry.levelCode) {
+                gradeSeparatedPlanarCrossingCount++;
+                continue;
+              }
+              if (Math.abs(intersection.yA - intersection.yB) > verticalToleranceM) {
+                verticalMismatchCrossingCount++;
+                continue;
+              }
+
+              const distanceOther = other.cumulativeStartM
+                + pointDistance(other.a, other.b) * intersection.t;
+              const distanceEntry = entry.cumulativeStartM
+                + pointDistance(entry.a, entry.b) * intersection.u;
+              const otherInterior = distanceOther > endpointToleranceM
+                && other.pathLengthM - distanceOther > endpointToleranceM;
+              const entryInterior = distanceEntry > endpointToleranceM
+                && entry.pathLengthM - distanceEntry > endpointToleranceM;
+              if (!otherInterior && !entryInterior) {
+                sameLevelEndpointEndpointCount++;
+                continue;
+              }
+
+              const intersectionKey = [
+                Math.min(other.featureIndex, entry.featureIndex),
+                Math.max(other.featureIndex, entry.featureIndex),
+                Math.round(intersection.x * 10),
+                Math.round(intersection.z * 10),
+                other.pathIndex,
+                entry.pathIndex,
+              ].join(':');
+              if (testedPairs.has(intersectionKey)) continue;
+              testedPairs.add(intersectionKey);
+
+              const addSplit = (record, distance) => {
+                const key = keyForPath(record.featureIndex, record.pathIndex);
+                const values = splits.get(key) ?? [];
+                values.push(distance);
+                splits.set(key, values);
+              };
+              if (otherInterior) addSplit(other, distanceOther);
+              if (entryInterior) addSplit(entry, distanceEntry);
+              if (otherInterior && entryInterior) sameLevelInteriorInteriorCount++;
+              else sameLevelEndpointInteriorCount++;
+            }
+            bucket.push(entry.id);
+            cells.set(key, bucket);
+          }
+        }
+      }
+    }
+  }
+
+  const beforePathCount = features.reduce((total, feature) => total + feature.paths.length, 0);
+  for (let featureIndex = 0; featureIndex < features.length; featureIndex++) {
+    const feature = features[featureIndex];
+    const nextPaths = [];
+    for (let pathIndex = 0; pathIndex < feature.paths.length; pathIndex++) {
+      const key = keyForPath(featureIndex, pathIndex);
+      const distances = splits.get(key) ?? [];
+      const pieces = splitPolylineAtDistances(feature.paths[pathIndex], distances);
+      if (pieces.length > 1) {
+        splitPathCount++;
+        generatedPieceCount += pieces.length - 1;
+      }
+      nextPaths.push(...pieces);
+    }
+    feature.paths = nextPaths;
+  }
+
+  const afterPathCount = features.reduce((total, feature) => total + feature.paths.length, 0);
+  return {
+    cellSizeM,
+    endpointToleranceM,
+    verticalToleranceM,
+    candidateSegmentPairCount,
+    sameLevelEndpointEndpointCount,
+    sameLevelEndpointInteriorCount,
+    sameLevelInteriorInteriorCount,
+    gradeSeparatedPlanarCrossingCount,
+    ambiguousGradeTransitionCrossingCount,
+    verticalMismatchCrossingCount,
+    splitPathCount,
+    generatedPieceCount,
+    pathsBefore: beforePathCount,
+    pathsAfter: afterPathCount,
+  };
+}
+
 export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
   if (!Array.isArray(features)) throw new TypeError('Normalized CSCL features must be an array.');
   if (!Number.isFinite(toleranceM) || toleranceM <= 0 || toleranceM > 2) {
     throw new RangeError('CSCL graph endpoint tolerance must be greater than 0 and no more than 2 metres.');
   }
 
+  const nodingDiagnostics = nodeCSCLIntersections(features, { endpointToleranceM: toleranceM });
   const nodes = new Map();
   const edges = [];
   const spatial = new Map();
@@ -343,6 +597,7 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       position: { x: point.x, y: point.y, z: point.z },
       levelCode: Number.isInteger(levelCode) ? levelCode : null,
       sampleCount: 1,
+      loopCount: 0,
       incidentEdgeIds: [],
       incomingEdgeIds: [],
       outgoingEdgeIds: [],
@@ -364,9 +619,9 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
   let zeroLengthEdgeCount = 0;
 
   for (const feature of features) {
-    if (feature.paths.length > 1) {
+    if ((feature.sourceDisconnectedPathCount ?? 0) > 0) {
       disconnectedMultipartFeatureCount++;
-      disconnectedMultipartPathCount += feature.paths.length - 1;
+      disconnectedMultipartPathCount += feature.sourceDisconnectedPathCount;
     }
     reversedMultipartPartCount += feature.reversedPartCount ?? 0;
 
@@ -381,7 +636,7 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       const lengthM = path.slice(1).reduce((total, point, index) =>
         total + Math.hypot(point.x - path[index].x, point.z - path[index].z), 0);
       if (lengthM <= 0.01) zeroLengthEdgeCount++;
-      if (from.id === to.id) selfLoopEdgeCount++;
+      if (from.id === to.id) { selfLoopEdgeCount++; from.loopCount++; }
       if (allowedDirections.length === 0) unknownDirectionEdgeCount++;
 
       const edge = {
@@ -423,9 +678,10 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
 
   const degreeHistogram = {};
   for (const node of nodes.values()) {
-    node.degree = node.incidentEdgeIds.length;
+    node.degree = node.incidentEdgeIds.length + node.loopCount;
     degreeHistogram[node.degree] = (degreeHistogram[node.degree] ?? 0) + 1;
     delete node.sampleCount;
+    delete node.loopCount;
   }
 
   const componentSizes = [];
@@ -483,9 +739,9 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
 
   return {
     schemaVersion: 1,
-    topologySource: 'NYC CSCL PHYSICALID intersection-to-intersection centerlines',
+    topologySource: 'NYC CSCL source line-feature endpoints with same-level planar intersection noding',
     endpointSnapToleranceM: toleranceM,
-    crossingPolicy: 'Only source centerline endpoints are noded. Interior crossings are not connected by proximity; source endpoint level codes separate stacked roads.',
+    crossingPolicy: 'Same-level, geometrically coincident centerline intersections are noded. Different level codes remain separate. Interior intersections involving grade-transition features are excluded because interior elevation is not supplied.',
     nodes: nodeList,
     edges,
     diagnostics: {
@@ -505,6 +761,7 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       zeroLengthEdgeCount,
       selfLoopEdgeCount,
       coincidentDifferentLevelNodePairCount: differentLevelPairs.size,
+      intersectionNoding: nodingDiagnostics,
       disconnectedMultipartFeatureCount,
       disconnectedMultipartPathCount,
       reversedMultipartPartCount,

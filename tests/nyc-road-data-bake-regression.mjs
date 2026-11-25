@@ -118,6 +118,45 @@ const graphFeatures = [
     paths: [[{ x: 10, y: 0, z: -10 }, { x: 10, y: 0, z: 0 }]],
   },
 ];
+const nodedCrossingFeatures = [
+  {
+    id: 'horizontal', trafficDirection: 'TW', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 0, y: 0, z: 0 }, { x: 20, y: 0, z: 0 }]],
+  },
+  {
+    id: 'vertical', trafficDirection: 'FT', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 10, y: 0, z: -10 }, { x: 10, y: 0, z: 10 }]],
+  },
+  {
+    id: 'grade-separated', trafficDirection: 'TW', fromLevelCode: 17, toLevelCode: 17,
+    paths: [[{ x: 10, y: 0, z: -10 }, { x: 10, y: 0, z: 10 }]],
+  },
+  {
+    id: 'grade-transition', trafficDirection: 'TW', fromLevelCode: 13, toLevelCode: 17,
+    paths: [[{ x: 0, y: 0, z: 10 }, { x: 20, y: 0, z: 10 }]],
+  },
+];
+const nodedGraph = buildCSCLRoadGraph(nodedCrossingFeatures);
+assert.equal(nodedGraph.diagnostics.intersectionNoding.sameLevelInteriorInteriorCount, 1);
+assert.equal(nodedGraph.diagnostics.intersectionNoding.gradeSeparatedPlanarCrossingCount, 1);
+assert.equal(nodedGraph.diagnostics.intersectionNoding.ambiguousGradeTransitionCrossingCount, 3);
+assert.equal(nodedGraph.diagnostics.edgeCount, 5,
+  'same-level cross streets split into connected graph edges while grade-separated and transition roads remain unsplit');
+assert.equal(nodedGraph.diagnostics.junctionNodeCount, 1);
+assert.equal(nodedGraph.diagnostics.connectedComponentCount, 3);
+
+const nodedTFeatures = [
+  { id: 'through', trafficDirection: 'TW', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 0, y: 0, z: 0 }, { x: 20, y: 0, z: 0 }]] },
+  { id: 'tee', trafficDirection: 'FT', fromLevelCode: 13, toLevelCode: 13,
+    paths: [[{ x: 10, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }]] },
+];
+const teeGraph = buildCSCLRoadGraph(nodedTFeatures);
+assert.equal(teeGraph.diagnostics.intersectionNoding.sameLevelEndpointInteriorCount, 1);
+assert.equal(teeGraph.diagnostics.edgeCount, 3);
+assert.equal(teeGraph.diagnostics.junctionNodeCount, 1);
+assert.equal(teeGraph.diagnostics.connectedComponentCount, 1);
+
 const directedGraph = buildCSCLRoadGraph(graphFeatures);
 assert.equal(directedGraph.diagnostics.edgeCount, 4);
 assert.equal(directedGraph.diagnostics.connectedComponentCount, 2,
@@ -141,6 +180,7 @@ const network = buildBakedStreetNetwork([
 assert.equal(network.schemaVersion, 3);
 assert.equal(network.graph.schemaVersion, 1);
 assert.equal(network.graph.diagnostics.edgeCount, 2);
+assert.equal(network.graph.diagnostics.intersectionNoding.pathsAfter, 2);
 assert.equal(network.graph.diagnostics.connectedComponentCount, 1);
 assert.equal(network.coordinateFrame.name, 'local-ENU');
 assert.equal(network.coordinateFrame.verticalAxis, 'source third ordinate in metres; 2D coordinates use 0; not a terrain elevation model');
@@ -157,6 +197,6 @@ assert.deepEqual(network.features.map((item) => item.id), ['71', '72'],
 
 console.log(JSON.stringify({
   suite: 'NYC CSCL offline-bake normalization regression',
-  assertions: 57,
+  assertions: 68,
   result: 'PASS',
 }));
