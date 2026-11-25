@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import {
   buildBakedStreetNetwork,
+  buildCSCLRoadGraph,
   geographicToLocalENU,
+  mergeCSCLPaths,
   normalizeCSCLFeature,
 } from '../scripts/nyc-street-data-core.mjs';
 
@@ -79,6 +81,58 @@ assert.equal(normalizeCSCLFeature(makeFeature({ status: '3' })).reason, 'not-con
 assert.equal(normalizeCSCLFeature(makeFeature({ rw_type: '12' })).reason, 'non-drivable-roadway-type');
 assert.equal(normalizeCSCLFeature(makeFeature({ trafdir: 'NV' })).reason, 'non-vehicular');
 
+
+const merged = mergeCSCLPaths([
+  [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }],
+  [{ x: 10.05, y: 0, z: 0 }, { x: 20, y: 0, z: 0 }],
+  [{ x: 100, y: 0, z: 0 }, { x: 110, y: 0, z: 0 }],
+]);
+assert.equal(merged.paths.length, 2, 'only contiguous path parts are merged');
+assert.equal(merged.mergedPathPartCount, 1);
+assert.equal(merged.paths[0].length, 3);
+assert.equal(merged.paths[1].length, 2);
+
+const graphFeatures = [
+  {
+    id: 'g1', physicalId: 'p1', streetName: 'A', roadwayType: 'street',
+    roadwayTypeCode: 1, trafficDirection: 'TW', fromLevelCode: 13, toLevelCode: 13,
+    widthM: 10, numberTravelLanes: 2, numberTotalLanes: 2, postedSpeed: 25,
+    paths: [[{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }]],
+  },
+  {
+    id: 'g2', physicalId: 'p2', streetName: 'B', roadwayType: 'street',
+    roadwayTypeCode: 1, trafficDirection: 'FT', fromLevelCode: 13, toLevelCode: 13,
+    widthM: 10, numberTravelLanes: 1, numberTotalLanes: 1, postedSpeed: 20,
+    paths: [[{ x: 10, y: 0, z: 0 }, { x: 20, y: 0, z: 0 }]],
+  },
+  {
+    id: 'g3', physicalId: 'p3', streetName: 'C', roadwayType: 'street',
+    roadwayTypeCode: 1, trafficDirection: 'TF', fromLevelCode: 13, toLevelCode: 13,
+    widthM: 10, numberTravelLanes: 1, numberTotalLanes: 1, postedSpeed: 20,
+    paths: [[{ x: 10, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }]],
+  },
+  {
+    id: 'g4', physicalId: 'p4', streetName: 'D', roadwayType: 'bridge',
+    roadwayTypeCode: 3, trafficDirection: 'TW', fromLevelCode: 17, toLevelCode: 17,
+    widthM: 12, numberTravelLanes: 2, numberTotalLanes: 4, postedSpeed: 35,
+    paths: [[{ x: 10, y: 0, z: -10 }, { x: 10, y: 0, z: 0 }]],
+  },
+];
+const directedGraph = buildCSCLRoadGraph(graphFeatures);
+assert.equal(directedGraph.diagnostics.edgeCount, 4);
+assert.equal(directedGraph.diagnostics.connectedComponentCount, 2,
+  'same-plan endpoints at distinct CSCL levels remain grade-separated');
+assert.equal(directedGraph.diagnostics.junctionNodeCount, 1);
+assert.equal(directedGraph.diagnostics.twoWayEdgeCount, 2);
+assert.equal(directedGraph.diagnostics.oneWayEdgeCount, 2);
+assert.equal(directedGraph.diagnostics.unknownDirectionEdgeCount, 0);
+assert.equal(directedGraph.diagnostics.isolatedNodeCount, 0);
+assert.equal(directedGraph.nodes.length, directedGraph.diagnostics.nodeCount);
+assert.equal(directedGraph.edges.length, directedGraph.diagnostics.edgeCount);
+assert(directedGraph.edges.every((edge) => edge.geometryRef.featureId === edge.sourceFeatureId));
+assert.deepEqual(directedGraph.edges.find((edge) => edge.sourceFeatureId === 'g2').allowedDirections, ['forward']);
+assert.deepEqual(directedGraph.edges.find((edge) => edge.sourceFeatureId === 'g3').allowedDirections, ['reverse']);
+
 const network = buildBakedStreetNetwork([
   makeFeature(),
   makeFeature({ objectid: 72, rw_type: '2', trafdir: 'FT', st_width: '80' }),
@@ -100,6 +154,6 @@ assert.deepEqual(network.features.map((item) => item.id), ['71', '72'],
 
 console.log(JSON.stringify({
   suite: 'NYC CSCL offline-bake normalization regression',
-  assertions: 38,
+  assertions: 54,
   result: 'PASS',
 }));

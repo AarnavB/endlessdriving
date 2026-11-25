@@ -122,6 +122,7 @@ async function main() {
     bounds,
     counts: payload.counts,
     sourceFieldDiagnostics: payload.sourceFieldDiagnostics,
+    graph: payload.graph.diagnostics,
     files: {
       streetNetwork: 'manhattan-street-network.json',
       sha256: checksum,
@@ -136,6 +137,7 @@ async function main() {
     sha256: checksum,
     counts: payload.counts,
     sourceFieldDiagnostics: payload.sourceFieldDiagnostics,
+    graph: payload.graph.diagnostics,
   }, null, 2) + '\n');
 }
 

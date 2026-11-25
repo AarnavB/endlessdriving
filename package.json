@@ -13,7 +13,8 @@
     "test:city-routing": "node tests/city-routing-regression.mjs",
     "test:city-urban": "node tests/city-urban-regression.mjs",
     "bake:nyc:roads": "node scripts/bake-nyc-world-data.mjs",
-    "test:nyc-road-data": "node tests/nyc-road-data-bake-regression.mjs"
+    "test:nyc-road-data": "node tests/nyc-road-data-bake-regression.mjs",
+    "test:nyc-road-graph": "node tests/nyc-road-graph-bake-regression.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

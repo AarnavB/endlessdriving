@@ -50,6 +50,12 @@ jobs:
             public/data/nyc/manifest.json
           retention-days: 14
           if-no-files-found: error
+      - name: Validate baked NYC CSCL directed road graph
+        id: nyc_graph
+        if: always() && steps.nyc_bake.outcome == 'success'
+        run: npm run test:nyc-road-graph
+        continue-on-error: true
+
       - name: Drivetrain and vehicle physics regressions
         id: drivetrain
         if: always()
@@ -90,6 +96,7 @@ jobs:
           CITY_ROUTING_RESULT: ${{ steps.city_routing.outcome }}
           WORLD_RESULT: ${{ steps.world.outcome }}
           NYC_BAKE_RESULT: ${{ steps.nyc_bake.outcome }}
+          NYC_GRAPH_RESULT: ${{ steps.nyc_graph.outcome }}
         run: |
           printf 'build: %s\n' "$BUILD_RESULT"
           printf 'test:drivetrain: %s\n' "$DRIVETRAIN_RESULT"
@@ -104,4 +111,6 @@ jobs:
           test "$CITY_URBAN_RESULT" = success
           test "$CITY_ROUTING_RESULT" = success
           test "$WORLD_RESULT" = success
+          printf 'test:nyc-road-graph: %s\\n' "$NYC_GRAPH_RESULT"
           test "$NYC_BAKE_RESULT" = success
+          test "$NYC_GRAPH_RESULT" = success

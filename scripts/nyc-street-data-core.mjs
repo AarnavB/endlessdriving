@@ -86,6 +86,60 @@ function finiteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function pointDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+/**
+ * Reassemble contiguous MultiLineString parts belonging to one CSCL physical
+ * centerline. Disconnected parts remain distinct and are surfaced in graph
+ * diagnostics instead of being forced together.
+ */
+export function mergeCSCLPaths(paths, toleranceM = 0.35) {
+  if (!Array.isArray(paths)) throw new TypeError('CSCL paths must be an array.');
+  if (!Number.isFinite(toleranceM) || toleranceM <= 0 || toleranceM > 1) {
+    throw new RangeError('CSCL path-join tolerance must be greater than 0 and no more than 1 metre.');
+  }
+  const pending = paths.map((path) => path.map((point) => ({ ...point })));
+  const chains = [];
+  let reversedPartCount = 0;
+
+  while (pending.length > 0) {
+    const chain = pending.shift();
+    let extended = true;
+    while (extended) {
+      extended = false;
+      for (let index = 0; index < pending.length; index++) {
+        const part = pending[index];
+        if (pointDistance(chain.at(-1), part[0]) <= toleranceM) {
+          chain.push(...part.slice(1));
+        } else if (pointDistance(chain.at(-1), part.at(-1)) <= toleranceM) {
+          chain.push(...part.slice(0, -1).reverse());
+          reversedPartCount++;
+        } else if (pointDistance(chain[0], part.at(-1)) <= toleranceM) {
+          chain.unshift(...part.slice(0, -1));
+        } else if (pointDistance(chain[0], part[0]) <= toleranceM) {
+          chain.unshift(...part.slice(1).reverse());
+          reversedPartCount++;
+        } else {
+          continue;
+        }
+        pending.splice(index, 1);
+        extended = true;
+        break;
+      }
+    }
+    chains.push(chain);
+  }
+
+  return {
+    paths: chains,
+    sourcePathPartCount: paths.length,
+    mergedPathPartCount: paths.length - chains.length,
+    reversedPartCount,
+  };
+}
+
 function normalizePath(coordinates) {
   if (!Array.isArray(coordinates)) return null;
   const path = [];
@@ -134,8 +188,10 @@ export function normalizeCSCLFeature(feature, fallbackIndex = 0) {
   else return { feature: null, reason: 'unsupported-geometry' };
 
   if (!Array.isArray(rawPaths)) return { feature: null, reason: 'invalid-geometry' };
-  const paths = rawPaths.map(normalizePath).filter(Boolean);
-  if (paths.length === 0) return { feature: null, reason: 'empty-path' };
+  const sourcePaths = rawPaths.map(normalizePath).filter(Boolean);
+  if (sourcePaths.length === 0) return { feature: null, reason: 'empty-path' };
+  const pathMerge = mergeCSCLPaths(sourcePaths);
+  const paths = pathMerge.paths;
 
   const objectId = readProperty(properties, 'objectid');
   const physicalId = readProperty(properties, 'physicalid');
@@ -171,6 +227,9 @@ export function normalizeCSCLFeature(feature, fallbackIndex = 0) {
       postedSpeed,
       widthM,
       bikeLane: readProperty(properties, 'bike_lane'),
+      sourcePathPartCount: pathMerge.sourcePathPartCount,
+      mergedPathPartCount: pathMerge.mergedPathPartCount,
+      reversedPartCount: pathMerge.reversedPartCount,
       paths,
     },
     reason: null,
@@ -217,6 +276,242 @@ export function summarizeCSCLSourceFields(features) {
   };
 }
 
+/**
+ * Build a directed endpoint graph from CSCL intersection-to-intersection
+ * physical centerlines. Only source segment endpoints are snapped. Interior
+ * line crossings are never connected simply because they are nearby.
+ *
+ * FT follows source centerline/address-range direction, TF reverses it, and
+ * TW allows both directions. Source level codes keep grade-separated
+ * endpoints from becoming the same junction.
+ */
+export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
+  if (!Array.isArray(features)) throw new TypeError('Normalized CSCL features must be an array.');
+  if (!Number.isFinite(toleranceM) || toleranceM <= 0 || toleranceM > 2) {
+    throw new RangeError('CSCL graph endpoint tolerance must be greater than 0 and no more than 2 metres.');
+  }
+
+  const nodes = new Map();
+  const edges = [];
+  const spatial = new Map();
+  const adjacency = new Map();
+  const cellSize = toleranceM;
+  const directions = (code) => code === 'FT' ? ['forward']
+    : code === 'TF' ? ['reverse']
+      : code === 'TW' ? ['forward', 'reverse'] : [];
+  const levelIdentity = (value) => Number.isInteger(value) ? String(value) : 'unknown';
+  const cellKey = (x, z) => Math.floor(x / cellSize) + ':' + Math.floor(z / cellSize);
+
+  function getOrCreateNode(point, levelCode) {
+    const identity = levelIdentity(levelCode);
+    const snapLimit = identity === 'unknown' || identity === '99' ? 0.2 : toleranceM;
+    const cellX = Math.floor(point.x / cellSize);
+    const cellZ = Math.floor(point.z / cellSize);
+    let best = null;
+    let bestDistance = Infinity;
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const candidates = spatial.get((cellX + dx) + ':' + (cellZ + dz)) ?? [];
+        for (const candidateId of candidates) {
+          const candidate = nodes.get(candidateId);
+          if (levelIdentity(candidate.levelCode) !== identity) continue;
+          const distance = pointDistance(candidate.position, point);
+          if (distance <= snapLimit && distance < bestDistance) {
+            best = candidate;
+            bestDistance = distance;
+          }
+        }
+      }
+    }
+
+    if (best) {
+      best.sampleCount++;
+      best.position.x += (point.x - best.position.x) / best.sampleCount;
+      best.position.y += (point.y - best.position.y) / best.sampleCount;
+      best.position.z += (point.z - best.position.z) / best.sampleCount;
+      return best;
+    }
+
+    const baseId = 'cscl-node:' + Math.round(point.x * 100)
+      + ':' + Math.round(point.z * 100) + ':' + identity;
+    let id = baseId;
+    let suffix = 1;
+    while (nodes.has(id)) id = baseId + ':' + String(suffix++);
+    const node = {
+      id,
+      position: { x: point.x, y: point.y, z: point.z },
+      levelCode: Number.isInteger(levelCode) ? levelCode : null,
+      sampleCount: 1,
+      incidentEdgeIds: [],
+      incomingEdgeIds: [],
+      outgoingEdgeIds: [],
+    };
+    nodes.set(id, node);
+    const key = cellKey(point.x, point.z);
+    const bucket = spatial.get(key) ?? [];
+    bucket.push(id);
+    spatial.set(key, bucket);
+    adjacency.set(id, new Set());
+    return node;
+  }
+
+  let disconnectedMultipartFeatureCount = 0;
+  let disconnectedMultipartPathCount = 0;
+  let reversedMultipartPartCount = 0;
+  let selfLoopEdgeCount = 0;
+  let unknownDirectionEdgeCount = 0;
+  let zeroLengthEdgeCount = 0;
+
+  for (const feature of features) {
+    if (feature.paths.length > 1) {
+      disconnectedMultipartFeatureCount++;
+      disconnectedMultipartPathCount += feature.paths.length - 1;
+    }
+    reversedMultipartPartCount += feature.reversedPartCount ?? 0;
+
+    for (let pathIndex = 0; pathIndex < feature.paths.length; pathIndex++) {
+      const path = feature.paths[pathIndex];
+      if (!Array.isArray(path) || path.length < 2) continue;
+      const from = getOrCreateNode(path[0], feature.fromLevelCode);
+      const to = getOrCreateNode(path.at(-1), feature.toLevelCode);
+      const allowedDirections = directions(feature.trafficDirection);
+      const directionality = allowedDirections.length === 2 ? 'both'
+        : allowedDirections.length === 1 ? allowedDirections[0] : 'unknown';
+      const lengthM = path.slice(1).reduce((total, point, index) =>
+        total + Math.hypot(point.x - path[index].x, point.z - path[index].z), 0);
+      if (lengthM <= 0.01) zeroLengthEdgeCount++;
+      if (from.id === to.id) selfLoopEdgeCount++;
+      if (allowedDirections.length === 0) unknownDirectionEdgeCount++;
+
+      const edge = {
+        id: String(feature.id) + ':' + String(pathIndex),
+        sourceFeatureId: String(feature.id),
+        physicalId: feature.physicalId,
+        geometryRef: { featureId: String(feature.id), pathIndex },
+        fromNodeId: from.id,
+        toNodeId: to.id,
+        fromLevelCode: feature.fromLevelCode,
+        toLevelCode: feature.toLevelCode,
+        trafficDirection: feature.trafficDirection,
+        directionality,
+        allowedDirections,
+        roadwayType: feature.roadwayType,
+        roadwayTypeCode: feature.roadwayTypeCode,
+        streetName: feature.streetName,
+        widthM: feature.widthM,
+        numberTravelLanes: feature.numberTravelLanes,
+        numberTotalLanes: feature.numberTotalLanes,
+        postedSpeedSourceValue: feature.postedSpeed,
+        lengthM,
+      };
+      edges.push(edge);
+      if (!from.incidentEdgeIds.includes(edge.id)) from.incidentEdgeIds.push(edge.id);
+      if (!to.incidentEdgeIds.includes(edge.id)) to.incidentEdgeIds.push(edge.id);
+      if (allowedDirections.includes('forward')) {
+        from.outgoingEdgeIds.push(edge.id);
+        to.incomingEdgeIds.push(edge.id);
+      }
+      if (allowedDirections.includes('reverse')) {
+        to.outgoingEdgeIds.push(edge.id);
+        from.incomingEdgeIds.push(edge.id);
+      }
+      adjacency.get(from.id).add(to.id);
+      adjacency.get(to.id).add(from.id);
+    }
+  }
+
+  const degreeHistogram = {};
+  for (const node of nodes.values()) {
+    node.degree = node.incidentEdgeIds.length;
+    degreeHistogram[node.degree] = (degreeHistogram[node.degree] ?? 0) + 1;
+    delete node.sampleCount;
+  }
+
+  const componentSizes = [];
+  const visited = new Set();
+  for (const startId of nodes.keys()) {
+    if (visited.has(startId)) continue;
+    const stack = [startId];
+    visited.add(startId);
+    let size = 0;
+    while (stack.length > 0) {
+      const current = stack.pop();
+      size++;
+      for (const next of adjacency.get(current) ?? []) {
+        if (visited.has(next)) continue;
+        visited.add(next);
+        stack.push(next);
+      }
+    }
+    componentSizes.push(size);
+  }
+  componentSizes.sort((a, b) => b - a);
+
+  const levelCells = new Map();
+  const differentLevelPairs = new Set();
+  for (const node of nodes.values()) {
+    const key = cellKey(node.position.x, node.position.z);
+    const bucket = levelCells.get(key) ?? [];
+    for (const otherId of bucket) {
+      const other = nodes.get(otherId);
+      if (other.levelCode === node.levelCode) continue;
+      if (Math.hypot(
+        other.position.x - node.position.x,
+        other.position.z - node.position.z,
+      ) <= toleranceM) {
+        differentLevelPairs.add([other.id, node.id].sort().join('|'));
+      }
+    }
+    bucket.push(node.id);
+    levelCells.set(key, bucket);
+  }
+
+  const nodeList = [...nodes.values()].map((node) => ({
+    id: node.id,
+    position: node.position,
+    levelCode: node.levelCode,
+    degree: node.degree,
+    incidentEdgeIds: node.incidentEdgeIds,
+    incomingEdgeIds: node.incomingEdgeIds,
+    outgoingEdgeIds: node.outgoingEdgeIds,
+  }));
+  const twoWayEdgeCount = edges.filter((edge) => edge.directionality === 'both').length;
+  const oneWayEdgeCount = edges.filter((edge) =>
+    edge.directionality === 'forward' || edge.directionality === 'reverse').length;
+  const largestComponentNodeCount = componentSizes[0] ?? 0;
+
+  return {
+    schemaVersion: 1,
+    topologySource: 'NYC CSCL PHYSICALID intersection-to-intersection centerlines',
+    endpointSnapToleranceM: toleranceM,
+    crossingPolicy: 'Only source centerline endpoints are noded. Interior crossings are not connected by proximity; source endpoint level codes separate stacked roads.',
+    nodes: nodeList,
+    edges,
+    diagnostics: {
+      nodeCount: nodes.size,
+      edgeCount: edges.length,
+      connectedComponentCount: componentSizes.length,
+      largestComponentNodeCount,
+      largestComponentShare: nodes.size > 0 ? largestComponentNodeCount / nodes.size : 0,
+      terminalNodeCount: nodeList.filter((node) => node.degree === 1).length,
+      junctionNodeCount: nodeList.filter((node) => node.degree >= 3).length,
+      isolatedNodeCount: nodeList.filter((node) => node.degree === 0).length,
+      maximumNodeDegree: Math.max(0, ...nodeList.map((node) => node.degree)),
+      degreeHistogram,
+      twoWayEdgeCount,
+      oneWayEdgeCount,
+      unknownDirectionEdgeCount,
+      zeroLengthEdgeCount,
+      selfLoopEdgeCount,
+      coincidentDifferentLevelNodePairCount: differentLevelPairs.size,
+      disconnectedMultipartFeatureCount,
+      disconnectedMultipartPathCount,
+      reversedMultipartPartCount,
+    },
+  };
+}
+
 export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date().toISOString()) {
   if (!Array.isArray(features)) throw new TypeError('CSCL source features must be an array.');
   const normalized = [];
@@ -239,10 +534,12 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
   }
 
   normalized.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  const graph = buildCSCLRoadGraph(normalized);
   return {
     schema: 'endless-driving.nyc-street-network',
-    schemaVersion: 2,
+    schemaVersion: 3,
     sourceFieldDiagnostics: summarizeCSCLSourceFields(features),
+    graph,
     generatedAt,
     source: {
       datasetId: 'inkn-q76z',
@@ -276,6 +573,9 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
       rejectedFeatures: features.length - normalized.length,
       rejectedByReason: rejected,
       paths: normalized.reduce((total, item) => total + item.paths.length, 0),
+      sourcePathParts: normalized.reduce((total, item) => total + item.sourcePathPartCount, 0),
+      mergedPathParts: normalized.reduce((total, item) => total + item.mergedPathPartCount, 0),
+      reversedPathParts: normalized.reduce((total, item) => total + item.reversedPartCount, 0),
       vertices: normalized.reduce((total, item) =>
         total + item.paths.reduce((sum, path) => sum + path.length, 0), 0),
     },
