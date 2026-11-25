@@ -104,6 +104,11 @@ async function main() {
 
   const data = JSON.stringify(payload);
   const checksum = createHash('sha256').update(data).digest('hex');
+  for (const [attribute, diagnostic] of Object.entries(payload.sourceFieldDiagnostics.attributes)) {
+    if (diagnostic.nonNullFeatures === 0) {
+      process.stderr.write('CSCL source attribute unavailable or unmapped: ' + attribute + '\\n');
+    }
+  }
   const outDir = resolve(options.outDir);
   await mkdir(outDir, { recursive: true });
   const dataPath = resolve(outDir, 'manhattan-street-network.json');
@@ -116,6 +121,7 @@ async function main() {
     source: payload.source,
     bounds,
     counts: payload.counts,
+    sourceFieldDiagnostics: payload.sourceFieldDiagnostics,
     files: {
       streetNetwork: 'manhattan-street-network.json',
       sha256: checksum,
@@ -129,6 +135,7 @@ async function main() {
     manifest: manifestPath,
     sha256: checksum,
     counts: payload.counts,
+    sourceFieldDiagnostics: payload.sourceFieldDiagnostics,
   }, null, 2) + '\n');
 }
 

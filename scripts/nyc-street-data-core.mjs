@@ -3,7 +3,7 @@ const WGS84_INV_F = 298.257223563;
 const WGS84_F = 1 / WGS84_INV_F;
 const WGS84_E2 = WGS84_F * (2 - WGS84_F);
 const DEG_TO_RAD = Math.PI / 180;
-const ORIGIN = { latitude: 40.7595, longitude: -73.9906, altitudeM: 10 };
+const ORIGIN = { latitude: 40.7595, longitude: -73.9906, altitudeM: 0 };
 
 const originLat = ORIGIN.latitude * DEG_TO_RAD;
 const originLon = ORIGIN.longitude * DEG_TO_RAD;
@@ -49,14 +49,12 @@ export function geographicToLocalENU(longitude, latitude, altitudeM = 0) {
     -originSinLat * originSinLon,
     originCosLat,
   ];
-  const upAxis = [
-    originCosLat * originCosLon,
-    originCosLat * originSinLon,
-    originSinLat,
-  ];
   return {
     x: dot(eastAxis, delta),
-    y: dot(upAxis, delta),
+    // Keep the game's local vertical axis flat. Retain only a source-provided
+    // third ordinate; 2D centerlines remain at zero rather than acquiring
+    // artificial grade from Earth curvature across the tangent plane.
+    y: altitudeM,
     z: dot(northAxis, delta),
   };
 }
@@ -142,9 +140,13 @@ export function normalizeCSCLFeature(feature, fallbackIndex = 0) {
   const physicalId = readProperty(properties, 'physicalid');
   const segmentId = readProperty(properties, 'segmentid');
   const sourceId = objectId ?? segmentId ?? physicalId ?? feature.id ?? fallbackIndex;
-  const widthFeet = finiteNumber(readProperty(properties, 'st_width'));
+  const widthFeet = finiteNumber(readProperty(properties, 'st_width', 'street_width', 'paved_width', 'stwidth'));
   const widthM = widthFeet !== null && widthFeet > 0 ? widthFeet * 0.3048 : null;
-  const streetName = readProperty(properties, 'st_label', 'st_name', 'streetname', 'name');
+  const streetName = readProperty(
+    properties, 'stname_label', 'stname_lab', 'st_label', 'st_name', 'streetname', 'street_name', 'name',
+  );
+  const fromLevelCode = finiteNumber(readProperty(properties, 'frm_lvl_co', 'from_lvl_co', 'from_level'));
+  const toLevelCode = finiteNumber(readProperty(properties, 'to_lvl_co', 'to_level'));
 
   return {
     feature: {
@@ -154,11 +156,50 @@ export function normalizeCSCLFeature(feature, fallbackIndex = 0) {
       roadwayType,
       roadwayTypeCode,
       trafficDirection,
+      fromLevelCode,
+      toLevelCode,
       widthM,
       bikeLane: readProperty(properties, 'bike_lane'),
       paths,
     },
     reason: null,
+  };
+}
+
+/**
+ * Report the actual fields and non-null coverage returned by the live source.
+ * This makes field-name drift visible rather than silently baking null data.
+ */
+export function summarizeCSCLSourceFields(features) {
+  if (!Array.isArray(features)) throw new TypeError('CSCL source features must be an array.');
+  const fields = new Map();
+  for (const feature of features) {
+    for (const [name, value] of Object.entries(feature?.properties ?? {})) {
+      const key = name.toLowerCase();
+      const current = fields.get(key) ?? { name, nonNullFeatures: 0 };
+      if (value !== null && value !== undefined && value !== '') current.nonNullFeatures++;
+      fields.set(key, current);
+    }
+  }
+  const propertyNames = [...fields.values()].map((field) => field.name).sort((a, b) => a.localeCompare(b));
+  const resolve = (...aliases) => {
+    const matches = aliases.map((alias) => fields.get(alias.toLowerCase())).filter(Boolean);
+    const selected = matches.find((field) => field.nonNullFeatures > 0) ?? matches[0] ?? null;
+    return {
+      selectedField: selected?.name ?? null,
+      nonNullFeatures: selected?.nonNullFeatures ?? 0,
+      matchingFields: matches.map((field) => ({ name: field.name, nonNullFeatures: field.nonNullFeatures })),
+    };
+  };
+  return {
+    propertyCount: propertyNames.length,
+    propertyNames,
+    attributes: {
+      streetName: resolve('stname_label', 'stname_lab', 'st_label', 'st_name', 'streetname', 'street_name', 'name'),
+      widthFeet: resolve('st_width', 'street_width', 'paved_width', 'stwidth'),
+      fromLevelCode: resolve('frm_lvl_co', 'from_lvl_co', 'from_level'),
+      toLevelCode: resolve('to_lvl_co', 'to_level'),
+    },
   };
 }
 
@@ -186,7 +227,8 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
   normalized.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
   return {
     schema: 'endless-driving.nyc-street-network',
-    schemaVersion: 1,
+    schemaVersion: 2,
+    sourceFieldDiagnostics: summarizeCSCLSourceFields(features),
     generatedAt,
     source: {
       datasetId: 'inkn-q76z',
@@ -200,11 +242,16 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
         NV: 'non-vehicular; excluded from this drivable network',
       },
       roadwayTypeSemantics: Object.fromEntries(ROADWAY_TYPE_NAMES),
+      levelCodeSemantics: {
+        '1-12': 'below grade 1-12', '13': 'at grade',
+        '14-26': 'above grade 1-13', '99': 'not applicable',
+      },
     },
     coordinateFrame: {
       name: 'local-ENU',
       units: 'metres',
-      axes: '+X east, +Y up, +Z north',
+      axes: '+X east, +Y source height, +Z north',
+      verticalAxis: 'source third ordinate in metres; 2D coordinates use 0; not a terrain elevation model',
       origin: ORIGIN,
       sourceCoordinates: 'WGS84 longitude/latitude',
     },
