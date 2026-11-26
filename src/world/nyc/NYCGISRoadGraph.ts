@@ -44,8 +44,8 @@ class MinQueue<T> {
 /** Runtime graph whose only road/node inputs are the validated CSCL tile payloads. */
 export class NYCGISRoadGraph extends CityRoadGraph {
   readonly isGISBacked=true;
-  private readonly nodes=new Map<string,CityIntersection>();
-  private readonly segments=new Map<string,CityRoadSegment>();
+  private readonly gisNodes=new Map<string,CityIntersection>();
+  private readonly gisSegments=new Map<string,CityRoadSegment>();
   private readonly outgoing=new Map<string,CityRoadEdge[]>();
   private readonly incoming=new Map<string,CityRoadEdge[]>();
   private readonly directed=new Map<string,CityRoadEdge[]>();
@@ -57,7 +57,7 @@ export class NYCGISRoadGraph extends CityRoadGraph {
 
   constructor(tiles:NYCStreetTile[],spawnPosition:CityVector3) {
     super(20261126,false);this.spawnAnchor={...spawnPosition};this.addTiles(tiles);
-    if(!this.segments.size)throw new Error('Initial GIS tiles contain no directed drivable road segments.');
+    if(!this.gisSegments.size)throw new Error('Initial GIS tiles contain no directed drivable road segments.');
   }
   addTiles(tiles:NYCStreetTile[]):void {
     for(const tile of tiles){if(this.loadedTiles.has(tile.id))continue;
@@ -75,24 +75,24 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     throw new Error('GIS intersections must be addressed by source CSCL node ID.');
   }
   override getIntersection(id:string):CityIntersection {
-    const v=this.nodes.get(id);if(!v)throw new Error('GIS node is not loaded: '+id);return v;
+    const v=this.gisNodes.get(id);if(!v)throw new Error('GIS node is not loaded: '+id);return v;
   }
   override getSegmentBetween(_a:string,_b:string):CityRoadSegment {
     throw new Error('Synthetic grid segments are disabled for the GIS road graph.');
   }
   override getSegment(id:string):CityRoadSegment {
-    const v=this.segments.get(id);if(!v)throw new Error('GIS road edge is not loaded: '+id);return v;
+    const v=this.gisSegments.get(id);if(!v)throw new Error('GIS road edge is not loaded: '+id);return v;
   }
   override getEdgeFromTo(a:string,b:string):CityRoadEdge {
     const e=(this.outgoing.get(a)??[]).find(v=>v.toNodeId===b);
     if(!e)throw new Error('No legal directed CSCL edge '+a+' -> '+b);return {...e};
   }
   override getOutgoingEdges(id:string):CityRoadEdge[] {
-    if(!this.nodes.has(id))throw new Error('GIS node is not loaded: '+id);
+    if(!this.gisNodes.has(id))throw new Error('GIS node is not loaded: '+id);
     return (this.outgoing.get(id)??[]).map(e=>({...e}));
   }
   getIncomingEdges(id:string):CityRoadEdge[] {
-    if(!this.nodes.has(id))throw new Error('GIS node is not loaded: '+id);
+    if(!this.gisNodes.has(id))throw new Error('GIS node is not loaded: '+id);
     return (this.incoming.get(id)??[]).map(e=>({...e}));
   }
   override getRoadProfile(axis:'x'|'z',lineIndex:number):CityRoadProfile {
@@ -161,14 +161,14 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     return this.getNearestLanePose(x,z,px,pz,py).tangent;
   }
   override findRoute(start:string,destination:string):CityRoadEdge[] {
-    if(!this.nodes.has(start)||!this.nodes.has(destination))throw new Error('Route endpoints must be loaded GIS nodes.');
+    if(!this.gisNodes.has(start)||!this.gisNodes.has(destination))throw new Error('Route endpoints must be loaded GIS nodes.');
     if(start===destination)return [];
     const queue=new MinQueue<string>(),cost=new Map<string,number>([[start,0]]);
     const previous=new Map<string,{nodeId:string;edge:CityRoadEdge}>();
-    const heuristic=(id:string)=>{const a=this.nodes.get(id)!.position,b=this.nodes.get(destination)!.position;return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);};
+    const heuristic=(id:string)=>{const a=this.gisNodes.get(id)!.position,b=this.gisNodes.get(destination)!.position;return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);};
     queue.push(start,heuristic(start));
     while(queue.size){const current=queue.pop()!;if(current===destination)break;const g=cost.get(current)!;
-      for(const e of this.outgoing.get(current)??[]){const next=g+this.segments.get(e.segmentId)!.lengthM;
+      for(const e of this.outgoing.get(current)??[]){const next=g+this.gisSegments.get(e.segmentId)!.lengthM;
         if(next>=(cost.get(e.toNodeId)??Infinity))continue;
         cost.set(e.toNodeId,next);previous.set(e.toNodeId,{nodeId:current,edge:e});queue.push(e.toNodeId,next+heuristic(e.toNodeId));}}
     if(!previous.has(destination))throw new Error('No directed route exists in the loaded CSCL graph.');
@@ -193,7 +193,7 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     for(let x=Math.floor(minX/CELL_M);x<=Math.floor(maxX/CELL_M);x++)
       for(let z=Math.floor(minZ/CELL_M);z<=Math.floor(maxZ/CELL_M);z++)
         for(const id of this.segmentCells.get(cell(x*CELL_M,z*CELL_M))??[])ids.add(id);
-    return [...ids].map(id=>this.segments.get(id)!).filter(s=>{
+    return [...ids].map(id=>this.gisSegments.get(id)!).filter(s=>{
       const p=s.geometry!,w=s.profile.widthM*0.5;
       const ax=Math.min(...p.map(v=>v.x))-w,bx=Math.max(...p.map(v=>v.x))+w;
       const az=Math.min(...p.map(v=>v.z))-w,bz=Math.max(...p.map(v=>v.z))+w;
@@ -205,7 +205,7 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     for(let x=Math.floor(b.minX/CELL_M);x<=Math.floor(b.maxX/CELL_M);x++)
       for(let z=Math.floor(b.minZ/CELL_M);z<=Math.floor(b.maxZ/CELL_M);z++)
         for(const id of this.nodeCells.get(cell(x*CELL_M,z*CELL_M))??[])ids.add(id);
-    return [...ids].map(id=>this.nodes.get(id)!).filter(n=>n.position.x>=b.minX&&n.position.x<=b.maxX&&n.position.z>=b.minZ&&n.position.z<=b.maxZ);
+    return [...ids].map(id=>this.gisNodes.get(id)!).filter(n=>n.position.x>=b.minX&&n.position.x<=b.maxX&&n.position.z>=b.minZ&&n.position.z<=b.maxZ);
   }
   getDirectedEdgesNear(x:number,z:number,radiusM=800,limit=64):CityRoadEdge[] {
     const rank:Array<{edge:CityRoadEdge;distance:number}>=[];
@@ -217,26 +217,26 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     for(const item of rank){const key=item.edge.segmentId+':'+item.edge.direction;if(!result.has(key))result.set(key,item.edge);if(result.size>=limit)break;}
     return [...result.values()].map(e=>({...e}));
   }
-  override getUnderpassSegments():CityRoadSegment[]{return [...this.segments.values()].filter(s=>s.roadType==='underpass');}
+  override getUnderpassSegments():CityRoadSegment[]{return [...this.gisSegments.values()].filter(s=>s.roadType==='underpass');}
   override getInterchangeDescriptor(){return {groundEntryNodeId:'',groundExitNodeId:'',deckCrossingNodeId:'',entryRampSegmentIds:[],exitRampSegmentIds:[],highwaySegmentIds:[],underpassSegmentIds:[]};}
 
   private addNode(source:NYCStreetTileNode):void {
     const p=source.position;if(!source.id||!p||![p.x,p.y,p.z].every(Number.isFinite))throw new Error('Invalid CSCL tile node.');
-    const old=this.nodes.get(source.id);if(old){if(Math.hypot(old.position.x-p.x,old.position.y-p.y,old.position.z-p.z)>0.02)throw new Error('Conflicting duplicate node '+source.id);return;}
+    const old=this.gisNodes.get(source.id);if(old){if(Math.hypot(old.position.x-p.x,old.position.y-p.y,old.position.z-p.z)>0.02)throw new Error('Conflicting duplicate node '+source.id);return;}
     const code=Number.isInteger(source.levelCode)?source.levelCode:null,levelCode=code===null||code===99?13:code;
     const kind:CityRoadLevelKind=levelCode<13?'underpass':levelCode>13?'elevated':'ground';
     const node:CityIntersection={id:source.id,gridX:Math.round(p.x/160),gridZ:Math.round(p.z/160),position:{...p},elevationM:p.y,level:levelCode-13,kind,intersectionType:kind==='ground'?'at-grade':'grade-separated',signalControlled:kind==='ground'&&source.degree>=3,signalOffsetSeconds:hash(source.id)%5600/100};
-    this.nodes.set(node.id,node);this.outgoing.set(node.id,[]);this.incoming.set(node.id,[]);
+    this.gisNodes.set(node.id,node);this.outgoing.set(node.id,[]);this.incoming.set(node.id,[]);
     const k=cell(p.x,p.z),bucket=this.nodeCells.get(k)??new Set<string>();bucket.add(node.id);this.nodeCells.set(k,bucket);
   }
   private addEdge(source:NYCStreetTileEdge,tileNodes:Map<string,NYCStreetTileNode>):void {
-    if(this.segments.has(source.id))return;
-    if(!tileNodes.has(source.fromNodeId)||!tileNodes.has(source.toNodeId)||!this.nodes.has(source.fromNodeId)||!this.nodes.has(source.toNodeId))throw new Error('GIS tile missing edge endpoint '+source.id);
+    if(this.gisSegments.has(source.id))return;
+    if(!tileNodes.has(source.fromNodeId)||!tileNodes.has(source.toNodeId)||!this.gisNodes.has(source.fromNodeId)||!this.gisNodes.has(source.toNodeId))throw new Error('GIS tile missing edge endpoint '+source.id);
     if(!Array.isArray(source.geometry)||source.geometry.length<2||!Array.isArray(source.allowedDirections)||!source.allowedDirections.length)return;
     if(!['both','forward','reverse'].includes(source.directionality))return;
     const geometry=source.geometry.map(p=>({x:p.x,y:p.y,z:p.z}));
     if(geometry.some(p=>![p.x,p.y,p.z].every(Number.isFinite)))throw new Error('Non-finite CSCL geometry '+source.id);
-    const from=this.nodes.get(source.fromNodeId)!,to=this.nodes.get(source.toNodeId)!;
+    const from=this.gisNodes.get(source.fromNodeId)!,to=this.gisNodes.get(source.toNodeId)!;
     if(Math.hypot(geometry[0].x-from.position.x,geometry[0].z-from.position.z)>2||Math.hypot(geometry.at(-1)!.x-to.position.x,geometry.at(-1)!.z-to.position.z)>2)throw new Error('GIS polyline endpoints do not match source graph nodes '+source.id);
     const cumulative=[0];for(let i=1;i<geometry.length;i++)cumulative.push(cumulative[i-1]+Math.hypot(geometry[i].x-geometry[i-1].x,geometry[i].y-geometry[i-1].y,geometry[i].z-geometry[i-1].z));
     const lengthM=cumulative.at(-1)!;if(lengthM<=1)return;
@@ -253,7 +253,7 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     const hasZ=vertical>0.5;let roadType:CityRoadType='surface';
     if(hasZ){if(type==='tunnel')roadType='underpass';else if(type==='ramp')roadType=to.position.y>=from.position.y?'entrance-ramp':'exit-ramp';else if(type==='bridge'||type==='highway')roadType='elevated-highway';}
     const segment:CityRoadSegment={id:source.id,fromNodeId:source.fromNodeId,toNodeId:source.toNodeId,start:{...from.position},end:{...to.position},geometry,sourceFeatureId:source.sourceFeatureId,sourceRoadwayType:source.roadwayType,fromLevelCode:source.fromLevelCode,toLevelCode:source.toLevelCode,axis,lengthM,profile:{category:category(type),axis,lineIndex:0,lanesPerDirection:lanes,laneWidthM:laneWidth,widthM:width,speedLimitKmh:speed,directionality:dir},level:Math.min(from.level,to.level),roadType,maxGradient:0.2,horizontalCurvature:0,verticalCurvature:0,label:source.streetName??source.sourceFeatureId??source.id};
-    this.segments.set(segment.id,segment);this.cumulative.set(segment.id,cumulative);
+    this.gisSegments.set(segment.id,segment);this.cumulative.set(segment.id,cumulative);
     const edges:CityRoadEdge[]=[];
     if(source.allowedDirections.includes('forward')){const e={segmentId:source.id,fromNodeId:source.fromNodeId,toNodeId:source.toNodeId,direction:1 as const};this.outgoing.get(e.fromNodeId)!.push(e);this.incoming.get(e.toNodeId)!.push(e);edges.push(e);}
     if(source.allowedDirections.includes('reverse')){const e={segmentId:source.id,fromNodeId:source.toNodeId,toNodeId:source.fromNodeId,direction:-1 as const};this.outgoing.get(e.fromNodeId)!.push(e);this.incoming.get(e.toNodeId)!.push(e);edges.push(e);}

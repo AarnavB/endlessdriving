@@ -6,8 +6,8 @@ export interface NYCStreetTileRecord {
   bytes: number; edgeCount: number; nodeCount: number;
 }
 export interface NYCStreetManifest {
-  schema: 'endless-driving.nyc-street-network.tiles';
-  schemaVersion: 1;
+  schema: 'endless-driving.nyc-street-network';
+  schemaVersion: 3;
   generatedAt: string;
   tileSizeM: number;
   source: { datasetId: string; title: string; provider: string; url: string };
