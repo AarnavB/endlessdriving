@@ -215,6 +215,18 @@ assert.equal(bridgeGraph.getSegment('bridge-deck').roadType,'elevated-highway',
 assert.equal(bridgeGraph.getSegment('bridge-deck').geometry[1].y,0,
   'bridge deck elevation is not fabricated from the ground DEM');
 
+const boundedGraph = new NYCGISRoadGraph([fixture], {x:0,y:0,z:0}, null, 3);
+for (let index = 1; index <= 6; index++) {
+  boundedGraph.addTiles([{...structuredClone(fixture),id:'resident-'+index}]);
+  assert.ok(boundedGraph.getLoadedTileCount() <= 3,
+    'GIS graph resident tile count must stay within the configured LRU bound');
+}
+assert.equal(boundedGraph.getLoadedTileCount(),3);
+assert.equal(boundedGraph.getLoadedRoadEdgeCount(),2,
+  'evicting duplicate tile payloads must preserve edges still owned by resident tiles');
+assert.equal(boundedGraph.getOutgoingEdges('n0').length,1,
+  'directed graph connectivity survives resident-tile rebuilds');
+
 const nearest = runtimeGraph.getNearestLanePose(47,2,1,0,0);
 assert.ok(Math.abs(nearest.position.x-47)<1.5 && Math.abs(nearest.position.z)<1.5,
   'nearest drivable-lane query must resolve the source polyline');

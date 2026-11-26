@@ -52,21 +52,49 @@ export class NYCGISRoadGraph extends CityRoadGraph {
   private readonly cumulative=new Map<string,number[]>();
   private readonly segmentCells=new Map<string,Set<string>>();
   private readonly nodeCells=new Map<string,Set<string>>();
-  private readonly loadedTiles=new Set<string>();
+  private readonly residentTiles=new Map<string,NYCStreetTile>();
+  private readonly terrainHeightAt:((x:number,z:number)=>number|null)|null;
+  private readonly maxResidentTiles:number;
   private readonly spawnAnchor:CityVector3;
 
-  constructor(tiles:NYCStreetTile[],spawnPosition:CityVector3) {
-    super(20261126,false);this.spawnAnchor={...spawnPosition};this.addTiles(tiles);
+  constructor(
+    tiles:NYCStreetTile[],
+    spawnPosition:CityVector3,
+    terrainHeightAt:((x:number,z:number)=>number|null)|null=null,
+    maxResidentTiles=48,
+  ) {
+    super(20261126,false);
+    this.spawnAnchor={...spawnPosition};
+    this.terrainHeightAt=terrainHeightAt;
+    this.maxResidentTiles=Math.max(1,Math.trunc(maxResidentTiles));
+    this.addTiles(tiles);
     if(!this.gisSegments.size)throw new Error('Initial GIS tiles contain no directed drivable road segments.');
   }
   addTiles(tiles:NYCStreetTile[]):void {
-    for(const tile of tiles){if(this.loadedTiles.has(tile.id))continue;
-      const tileNodes=new Map(tile.graph.nodes.map(n=>[n.id,n]));
-      for(const n of tile.graph.nodes)this.addNode(n);
-      for(const e of tile.graph.edges)this.addEdge(e,tileNodes);
-      this.loadedTiles.add(tile.id);}
+    if(tiles.length===0)return;
+    for(const tile of tiles) {
+      if(this.residentTiles.has(tile.id))this.residentTiles.delete(tile.id);
+      this.residentTiles.set(tile.id,tile);
+    }
+    while(this.residentTiles.size>this.maxResidentTiles) {
+      const oldest=this.residentTiles.keys().next().value as string|undefined;
+      if(!oldest)break;
+      this.residentTiles.delete(oldest);
+    }
+    this.rebuildResidentGraph();
   }
-  getLoadedTileCount():number{return this.loadedTiles.size;}
+  getLoadedTileCount():number{return this.residentTiles.size;}
+  getLoadedRoadEdgeCount():number{return this.gisSegments.size;}
+  private rebuildResidentGraph():void {
+    this.gisNodes.clear();this.gisSegments.clear();
+    this.outgoing.clear();this.incoming.clear();this.directed.clear();
+    this.cumulative.clear();this.segmentCells.clear();this.nodeCells.clear();
+    for(const tile of this.residentTiles.values()) {
+      const tileNodes=new Map(tile.graph.nodes.map(n=>[n.id,n]));
+      for(const node of tile.graph.nodes)this.addNode(node);
+      for(const edge of tile.graph.edges)this.addEdge(edge,tileNodes);
+    }
+  }
 
   override getIntersectionId(_x:number,_z:number,_level=0):string {
     throw new Error('Grid intersection IDs are disabled for the GIS road graph.');
@@ -224,6 +252,10 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     const p={...source.position};if(!source.id||![p.x,p.y,p.z].every(Number.isFinite))throw new Error('Invalid CSCL tile node.');
     const old=this.gisNodes.get(source.id);if(old){if(Math.hypot(old.position.x-p.x,old.position.y-p.y,old.position.z-p.z)>0.02)throw new Error('Conflicting duplicate node '+source.id);return;}
     const code=Number.isInteger(source.levelCode)?source.levelCode:null,levelCode=code===null||code===99?13:code;
+    if(levelCode===13&&this.terrainHeightAt) {
+      const height=this.terrainHeightAt(p.x,p.z);
+      if(height!==null&&Number.isFinite(height))p.y=height;
+    }
     const kind:CityRoadLevelKind=levelCode<13?'underpass':levelCode>13?'elevated':'ground';
     const node:CityIntersection={id:source.id,gridX:Math.round(p.x/160),gridZ:Math.round(p.z/160),position:{...p},elevationM:p.y,level:levelCode-13,kind,intersectionType:kind==='ground'?'at-grade':'grade-separated',signalControlled:kind==='ground'&&source.degree>=3,signalOffsetSeconds:hash(source.id)%5600/100};
     this.gisNodes.set(node.id,node);this.outgoing.set(node.id,[]);this.incoming.set(node.id,[]);
@@ -234,13 +266,20 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     if(!tileNodes.has(source.fromNodeId)||!tileNodes.has(source.toNodeId)||!this.gisNodes.has(source.fromNodeId)||!this.gisNodes.has(source.toNodeId))throw new Error('GIS tile missing edge endpoint '+source.id);
     if(!Array.isArray(source.geometry)||source.geometry.length<2||!Array.isArray(source.allowedDirections)||!source.allowedDirections.length)return;
     if(!['both','forward','reverse'].includes(source.directionality))return;
-    const geometry=source.geometry.map(p=>({x:p.x,y:p.y,z:p.z}));
+    const type=source.roadwayType.toLowerCase();
+    const fromLevel=Number.isInteger(source.fromLevelCode)&&source.fromLevelCode!==99?source.fromLevelCode:13;
+    const toLevel=Number.isInteger(source.toLevelCode)&&source.toLevelCode!==99?source.toLevelCode:13;
+    const atGrade=fromLevel===13&&toLevel===13
+      &&type!=='bridge'&&type!=='tunnel'&&type!=='ramp';
+    const geometry=source.geometry.map(p=>{
+      const height=atGrade?this.terrainHeightAt?.(p.x,p.z):null;
+      return {x:p.x,y:height!==null&&height!==undefined&&Number.isFinite(height)?height:p.y,z:p.z};
+    });
     if(geometry.some(p=>![p.x,p.y,p.z].every(Number.isFinite)))throw new Error('Non-finite CSCL geometry '+source.id);
     const from=this.gisNodes.get(source.fromNodeId)!,to=this.gisNodes.get(source.toNodeId)!;
     if(Math.hypot(geometry[0].x-from.position.x,geometry[0].z-from.position.z)>2||Math.hypot(geometry.at(-1)!.x-to.position.x,geometry.at(-1)!.z-to.position.z)>2)throw new Error('GIS polyline endpoints do not match source graph nodes '+source.id);
     const cumulative=[0];for(let i=1;i<geometry.length;i++)cumulative.push(cumulative[i-1]+Math.hypot(geometry[i].x-geometry[i-1].x,geometry[i].y-geometry[i-1].y,geometry[i].z-geometry[i-1].z));
     const lengthM=cumulative.at(-1)!;if(lengthM<=1)return;
-    const type=source.roadwayType.toLowerCase();
     if(!['street','highway','bridge','tunnel','ramp','driveway','alley','u-turn'].includes(type))return;
     const dir=source.directionality as CityDirectionality;
     const total=Number.isFinite(source.numberTravelLanes)&&source.numberTravelLanes!>0?clamp(Math.round(source.numberTravelLanes!),1,12):type==='highway'?6:type==='ramp'||type==='alley'?1:2;
@@ -249,9 +288,11 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     const width=Math.max(Number.isFinite(source.widthM)&&source.widthM!>0?source.widthM!:0,lanes*laneWidth*(dir==='both'?2:1)+2);
     const rawSpeed=Number(source.postedSpeedSourceValue),speed=Number.isFinite(rawSpeed)&&rawSpeed>0?Math.min(130,rawSpeed*1.60934):type==='highway'?80:type==='ramp'?45:35;
     const axis: 'x'|'z'=Math.abs(to.position.x-from.position.x)>=Math.abs(to.position.z-from.position.z)?'x':'z';
-    const vertical=Math.max(...geometry.map(p=>p.y))-Math.min(...geometry.map(p=>p.y));
-    const hasZ=vertical>0.5;let roadType:CityRoadType='surface';
-    if(hasZ){if(type==='tunnel')roadType='underpass';else if(type==='ramp')roadType=to.position.y>=from.position.y?'entrance-ramp':'exit-ramp';else if(type==='bridge'||type==='highway')roadType='elevated-highway';}
+    let roadType:CityRoadType='surface';
+    // CSCL source level codes, not local DEM slope, define grade separation.
+    if(type==='tunnel'||(fromLevel<13&&toLevel<13))roadType='underpass';
+    else if(type==='ramp')roadType=to.position.y>=from.position.y?'entrance-ramp':'exit-ramp';
+    else if(type==='bridge'||fromLevel>13||toLevel>13)roadType='elevated-highway';
     const segment:CityRoadSegment={id:source.id,fromNodeId:source.fromNodeId,toNodeId:source.toNodeId,start:{...from.position},end:{...to.position},geometry,sourceFeatureId:source.sourceFeatureId,sourceRoadwayType:source.roadwayType,fromLevelCode:source.fromLevelCode,toLevelCode:source.toLevelCode,axis,lengthM,profile:{category:category(type),axis,lineIndex:0,lanesPerDirection:lanes,laneWidthM:laneWidth,widthM:width,speedLimitKmh:speed,directionality:dir},level:Math.min(from.level,to.level),roadType,maxGradient:0.2,horizontalCurvature:0,verticalCurvature:0,label:source.streetName??source.sourceFeatureId??source.id};
     this.gisSegments.set(segment.id,segment);this.cumulative.set(segment.id,cumulative);
     const edges:CityRoadEdge[]=[];
