@@ -8,6 +8,8 @@ import { CityRoadGraph } from '../world/nyc/CityRoadGraph';
 import { NYCGISRoadGraph } from '../world/nyc/NYCGISRoadGraph';
 import { NYCStreetNetworkLoader } from '../world/nyc/NYCStreetNetworkLoader';
 import { NYCBuildingFootprintLoader } from '../world/nyc/NYCBuildingFootprintLoader';
+import { NYCTerrainLoader } from '../world/nyc/NYCTerrainLoader';
+import { localBoundsToGeographic } from '../world/nyc/NYCGeo';
 import { GooglePhotorealisticTiles } from '../world/nyc/GooglePhotorealisticTiles';
 import { NYCEnvironmentLighting } from '../world/nyc/NYCEnvironmentLighting';
 import { NYCWaterfrontSystem } from '../world/nyc/NYCWaterfrontSystem';
@@ -41,6 +43,7 @@ export class Game {
   private readonly roadGraph: CityRoadGraph;
   private readonly streetLoader: NYCStreetNetworkLoader;
   private readonly buildingLoader: NYCBuildingFootprintLoader;
+  private readonly terrainLoader: NYCTerrainLoader;
   private readonly worldOffset = new THREE.Vector3();
   private worldScene!: NYCCityChunkManager;
   private waterfront!: NYCWaterfrontSystem;
@@ -72,10 +75,12 @@ export class Game {
     roadGraph: CityRoadGraph,
     streetLoader: NYCStreetNetworkLoader,
     buildingLoader: NYCBuildingFootprintLoader,
+    terrainLoader: NYCTerrainLoader,
   ) {
     this.roadGraph = roadGraph;
     this.streetLoader = streetLoader;
     this.buildingLoader = buildingLoader;
+    this.terrainLoader = terrainLoader;
     this.manualTransmission = settings.transmission === 'manual';
     this.graphicsQuality = settings.graphics;
     this.renderer = new THREE.WebGLRenderer({
@@ -169,10 +174,27 @@ export class Game {
     await RAPIER.init();
     const streetLoader = new NYCStreetNetworkLoader();
     const buildingLoader = new NYCBuildingFootprintLoader();
+    const terrainLoader = new NYCTerrainLoader();
     try {
       const initial = await streetLoader.loadInitialTiles();
-      const roadGraph = new NYCGISRoadGraph(initial.tiles, initial.spawnPosition);
-      const game = new Game(canvas, uiRoot, settings, roadGraph, streetLoader, buildingLoader);
+      const roadBounds = initial.tiles.reduce((bounds, tile) => ({
+        minX: Math.min(bounds.minX, tile.bounds.minX),
+        maxX: Math.max(bounds.maxX, tile.bounds.maxX),
+        minZ: Math.min(bounds.minZ, tile.bounds.minZ),
+        maxZ: Math.max(bounds.maxZ, tile.bounds.maxZ),
+      }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+      const terrainTiles = await terrainLoader.loadTilesForBounds(localBoundsToGeographic({
+        minX: roadBounds.minX - 64,
+        maxX: roadBounds.maxX + 64,
+        minZ: roadBounds.minZ - 64,
+        maxZ: roadBounds.maxZ + 64,
+      }));
+      if (terrainTiles.length === 0) {
+        throw new Error('No validated NYC 2017 DEM tiles cover the initial road network.');
+      }
+      const terrainHeightAt = (x: number, z: number) => terrainLoader.getHeightAtLocal(x, z);
+      const roadGraph = new NYCGISRoadGraph(initial.tiles, initial.spawnPosition, terrainHeightAt);
+      const game = new Game(canvas, uiRoot, settings, roadGraph, streetLoader, buildingLoader, terrainLoader);
       await game.initializePhysics();
       game.initializeGoogleTiles();
       game.startLoop();
@@ -180,6 +202,7 @@ export class Game {
     } catch (error) {
       streetLoader.dispose();
       buildingLoader.dispose();
+      terrainLoader.dispose();
       throw new Error(
         '[NYC GIS startup] Required NYC street assets could not be loaded or validated. '
           + 'No procedural grid fallback will be started.',
@@ -204,6 +227,7 @@ export class Game {
     this.googleTiles?.dispose();
     this.streetLoader.dispose();
     this.buildingLoader.dispose();
+    this.terrainLoader.dispose();
     this.environmentLighting.dispose(this.scene);
     this.renderer.dispose();
     this.physics.free();
@@ -289,6 +313,7 @@ export class Game {
     const spawnPosition = this.getSpawnPosition();
     const cityWorld = new NYCCityChunkManager(
       this.scene, this.physics, this.roadGraph, this.streetLoader, this.buildingLoader,
+      this.terrainLoader,
     );
     await cityWorld.initialize(spawnPosition);
     this.worldScene = cityWorld;

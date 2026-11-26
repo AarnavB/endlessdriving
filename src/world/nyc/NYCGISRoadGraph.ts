@@ -221,7 +221,7 @@ export class NYCGISRoadGraph extends CityRoadGraph {
   override getInterchangeDescriptor(){return {groundEntryNodeId:'',groundExitNodeId:'',deckCrossingNodeId:'',entryRampSegmentIds:[],exitRampSegmentIds:[],highwaySegmentIds:[],underpassSegmentIds:[]};}
 
   private addNode(source:NYCStreetTileNode):void {
-    const p=source.position;if(!source.id||!p||![p.x,p.y,p.z].every(Number.isFinite))throw new Error('Invalid CSCL tile node.');
+    const p={...source.position};if(!source.id||![p.x,p.y,p.z].every(Number.isFinite))throw new Error('Invalid CSCL tile node.');
     const old=this.gisNodes.get(source.id);if(old){if(Math.hypot(old.position.x-p.x,old.position.y-p.y,old.position.z-p.z)>0.02)throw new Error('Conflicting duplicate node '+source.id);return;}
     const code=Number.isInteger(source.levelCode)?source.levelCode:null,levelCode=code===null||code===99?13:code;
     const kind:CityRoadLevelKind=levelCode<13?'underpass':levelCode>13?'elevated':'ground';

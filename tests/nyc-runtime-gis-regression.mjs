@@ -191,6 +191,30 @@ assert.throws(() => runtimeGraph.findRoute('n2','n0'),
 assert.throws(() => runtimeGraph.getIntersectionId(0,0),
   /Grid intersection IDs are disabled/,
   'runtime GIS graph must not synthesize grid intersections');
+const terrainGraph = new NYCGISRoadGraph([fixture], {x:0,y:0,z:0}, (x,z) => 2 + x * 0.01 + z * 0.02);
+assert.equal(terrainGraph.getIntersection('n0').position.y, 2,
+  'at-grade source nodes use the validated DEM elevation sampler');
+assert.equal(terrainGraph.getSegment('one-way').geometry[1].y, 2.5,
+  'at-grade centerline vertices are sampled from the same DEM surface');
+assert.equal(terrainGraph.getSegment('one-way').geometry[2].y, 3,
+  'ground-road endpoint height agrees with the sampled graph node');
+
+const bridgeFixture = structuredClone(fixture);
+bridgeFixture.id = 'bridge-fixture';
+bridgeFixture.graph.nodes = [
+  makeNode('bridge-a',0,0,1), makeNode('bridge-b',100,0,1),
+].map((node) => ({...node,levelCode:17}));
+bridgeFixture.graph.edges = [
+  makeEdge('bridge-deck','bridge-a','bridge-b','both',['forward','reverse'],[
+    {x:0,y:0,z:0},{x:50,y:0,z:0},{x:100,y:0,z:0},
+  ]),
+].map((edge) => ({...edge,roadwayType:'bridge',fromLevelCode:17,toLevelCode:17}));
+const bridgeGraph = new NYCGISRoadGraph([bridgeFixture], {x:0,y:0,z:0}, () => 12);
+assert.equal(bridgeGraph.getSegment('bridge-deck').roadType,'elevated-highway',
+  'grade-separated bridge metadata is retained when the source has no 3D deck samples');
+assert.equal(bridgeGraph.getSegment('bridge-deck').geometry[1].y,0,
+  'bridge deck elevation is not fabricated from the ground DEM');
+
 const nearest = runtimeGraph.getNearestLanePose(47,2,1,0,0);
 assert.ok(Math.abs(nearest.position.x-47)<1.5 && Math.abs(nearest.position.z)<1.5,
   'nearest drivable-lane query must resolve the source polyline');

@@ -10,6 +10,8 @@ import { NYCGISRoadGraph } from './NYCGISRoadGraph';
 import { NYCStreetNetworkLoader } from './NYCStreetNetworkLoader';
 import { NYCBuildingFootprintLoader } from './NYCBuildingFootprintLoader';
 import type { NYCBuildingFootprint } from './NYCBuildingFootprintLoader';
+import { NYCTerrainLoader } from './NYCTerrainLoader';
+import { localBoundsToGeographic } from './NYCGeo';
 import {
   CitySpatialIndex,
   citySpatialHash,
@@ -291,6 +293,7 @@ export class NYCCityChunkManager {
     readonly graph: CityRoadGraph,
     private readonly streetLoader: NYCStreetNetworkLoader | null = null,
     private readonly buildingLoader: NYCBuildingFootprintLoader | null = null,
+    private readonly terrainLoader: NYCTerrainLoader | null = null,
   ) {
     this.scene.background = new THREE.Color(0x929fa6);
     this.scene.fog = new THREE.FogExp2(0x929fa6, 0.00085);
@@ -447,10 +450,11 @@ export class NYCCityChunkManager {
    */
   private sampleTerrainHeight(worldX: number, worldZ: number): number {
     if (this.graph instanceof NYCGISRoadGraph) {
-      // The currently integrated CSCL source is predominantly 2D. A flat
-      // zero datum is explicit until a validated NYC DEM is added to the bake.
-      return isHudsonWater(worldX, worldZ)
-        ? -getHudsonRiverDepthM(worldX, worldZ) - 1.25 : 0;
+      if (isHudsonWater(worldX, worldZ)) {
+        return -getHudsonRiverDepthM(worldX, worldZ) - 1.25;
+      }
+      // DEM heights are relative to the same sampled NAVD88 origin as the road graph.
+      return this.terrainLoader?.getHeightAtLocal(worldX, worldZ) ?? 0;
     }
     if (isHudsonWater(worldX, worldZ)) {
       return -getHudsonRiverDepthM(worldX, worldZ) - 1.25;
@@ -533,6 +537,24 @@ export class NYCCityChunkManager {
         });
         if (tiles.length === 0) {
           throw new Error('No authoritative NYC GIS tiles cover requested world chunk ' + key + '.');
+        }
+        if (!this.terrainLoader) {
+          throw new Error('GIS world streaming requires the validated NYC 2017 DEM loader.');
+        }
+        const roadBounds = tiles.reduce((bounds, tile) => ({
+          minX: Math.min(bounds.minX, tile.bounds.minX),
+          maxX: Math.max(bounds.maxX, tile.bounds.maxX),
+          minZ: Math.min(bounds.minZ, tile.bounds.minZ),
+          maxZ: Math.max(bounds.maxZ, tile.bounds.maxZ),
+        }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+        const terrainTiles = await this.terrainLoader.loadTilesForBounds(localBoundsToGeographic({
+          minX: roadBounds.minX - 64,
+          maxX: roadBounds.maxX + 64,
+          minZ: roadBounds.minZ - 64,
+          maxZ: roadBounds.maxZ + 64,
+        }));
+        if (terrainTiles.length === 0) {
+          throw new Error('No validated NYC DEM tiles cover the road data required by world chunk ' + key + '.');
         }
         this.graph.addTiles(tiles);
       }
@@ -875,9 +897,12 @@ export class NYCCityChunkManager {
 
           // HEIGHT_ROOF is authoritative where available. Missing values use
           // a feature-code median baked into the tile, with provenance preserved.
-          // Buildings are placed on the same zero datum as current 2D CSCL roads;
-          // GROUND_ELEVATION is retained but not applied until terrain DEM is loaded.
+          // The polygon extrusion base is lifted to the same NAVD88 DEM sample
+          // used by the rendered terrain and Rapier ground collision.
           const height = THREE.MathUtils.clamp(building.heightM, 2.5, 500);
+          const groundElevationM = this.sampleTerrainHeight(
+            building.centroid.x, building.centroid.z,
+          );
           const extrusion = new THREE.ExtrudeGeometry(shape, {
             depth: height,
             bevelEnabled: false,
@@ -888,7 +913,11 @@ export class NYCCityChunkManager {
           const attribute = extrusion.getAttribute('position');
           const base = gisBuildingPositions.length / 3;
           for (let i = 0; i < attribute.count; i++) {
-            gisBuildingPositions.push(attribute.getX(i), attribute.getY(i), attribute.getZ(i));
+            gisBuildingPositions.push(
+              attribute.getX(i),
+              attribute.getY(i) + groundElevationM,
+              attribute.getZ(i),
+            );
           }
           const index = extrusion.getIndex();
           if (index) {
