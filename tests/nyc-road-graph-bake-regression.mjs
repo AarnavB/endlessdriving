@@ -1,8 +1,23 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 const path = new URL('../public/data/nyc/manhattan-street-network.json', import.meta.url);
-const network = JSON.parse(await readFile(path, 'utf8'));
+const networkBytes = await readFile(path);
+const network = JSON.parse(networkBytes.toString('utf8'));
+const manifestPath = new URL('../public/data/nyc/manifest.json', import.meta.url);
+const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+assert.equal(manifest.schema, network.schema);
+assert.equal(manifest.schemaVersion, network.schemaVersion);
+assert.equal(manifest.generatedAt, network.generatedAt);
+assert.deepEqual(manifest.bounds, network.bounds);
+assert.equal(manifest.counts.sourceFeatures, network.counts.sourceFeatures);
+assert.equal(manifest.counts.retainedFeatures, network.counts.retainedFeatures);
+assert.equal(manifest.files.streetNetwork, 'manhattan-street-network.json');
+assert.equal(manifest.files.bytes, networkBytes.byteLength,
+  'manifest byte count must match the exact baked file on disk');
+assert.equal(manifest.files.sha256, createHash('sha256').update(networkBytes).digest('hex'),
+  'manifest SHA-256 must cover the exact baked file bytes, including its final newline');
 const graph = network.graph;
 assert.equal(network.schema, 'endless-driving.nyc-street-network');
 assert.equal(network.schemaVersion, 3);

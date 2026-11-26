@@ -102,7 +102,8 @@ async function main() {
     throw new Error('No constructed drivable CSCL segments survived normalization.');
   }
 
-  const data = JSON.stringify(payload);
+  // Hash and count the exact bytes written to disk, including the final newline.
+  const data = JSON.stringify(payload) + '\n';
   const checksum = createHash('sha256').update(data).digest('hex');
   for (const [attribute, diagnostic] of Object.entries(payload.sourceFieldDiagnostics.attributes)) {
     if (diagnostic.nonNullFeatures === 0) {
@@ -113,7 +114,7 @@ async function main() {
   await mkdir(outDir, { recursive: true });
   const dataPath = resolve(outDir, 'manhattan-street-network.json');
   const manifestPath = resolve(outDir, 'manifest.json');
-  await writeFile(dataPath, data + '\n', 'utf8');
+  await writeFile(dataPath, data, 'utf8');
   await writeFile(manifestPath, JSON.stringify({
     schema: payload.schema,
     schemaVersion: payload.schemaVersion,
