@@ -267,8 +267,10 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     if(!Array.isArray(source.geometry)||source.geometry.length<2||!Array.isArray(source.allowedDirections)||!source.allowedDirections.length)return;
     if(!['both','forward','reverse'].includes(source.directionality))return;
     const type=source.roadwayType.toLowerCase();
-    const fromLevel=Number.isInteger(source.fromLevelCode)&&source.fromLevelCode!==99?source.fromLevelCode:13;
-    const toLevel=Number.isInteger(source.toLevelCode)&&source.toLevelCode!==99?source.toLevelCode:13;
+    const fromLevelValue=source.fromLevelCode??13;
+    const toLevelValue=source.toLevelCode??13;
+    const fromLevel=Number.isInteger(fromLevelValue)&&fromLevelValue!==99?fromLevelValue:13;
+    const toLevel=Number.isInteger(toLevelValue)&&toLevelValue!==99?toLevelValue:13;
     const atGrade=fromLevel===13&&toLevel===13
       &&type!=='bridge'&&type!=='tunnel'&&type!=='ramp';
     const geometry=source.geometry.map(p=>{
