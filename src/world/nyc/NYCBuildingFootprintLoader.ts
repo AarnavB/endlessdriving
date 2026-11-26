@@ -150,6 +150,40 @@ export class NYCBuildingFootprintLoader {
         || !Array.isArray(tile.buildings) || tile.buildings.length !== record.buildingCount) {
         throw new Error('NYC building tile schema/count validation failed: ' + record.id);
       }
+      const buildingIds = new Set<string>();
+      for (const building of tile.buildings) {
+        if (!building || typeof building.id !== 'string' || building.id.length === 0
+          || buildingIds.has(building.id)
+          || !Number.isInteger(building.featureCode)
+          || !Number.isFinite(building.heightM) || building.heightM < 2.5 || building.heightM > 500
+          || !building.centroid || !Number.isFinite(building.centroid.x)
+          || !Number.isFinite(building.centroid.z)
+          || !Array.isArray(building.polygons) || building.polygons.length === 0) {
+          throw new Error('NYC building tile contains invalid footprint metadata: ' + record.id);
+        }
+        buildingIds.add(building.id);
+        for (const polygon of building.polygons) {
+          if (!Array.isArray(polygon) || polygon.length === 0) {
+            throw new Error('NYC building tile contains an empty polygon: ' + building.id);
+          }
+          for (const ring of polygon) {
+            if (!Array.isArray(ring) || ring.length < 4) {
+              throw new Error('NYC building footprint ring is too short: ' + building.id);
+            }
+            for (const point of ring) {
+              if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.z)) {
+                throw new Error('NYC building footprint contains a non-finite coordinate: ' + building.id);
+              }
+            }
+            const first = ring[0];
+            const last = ring[ring.length - 1];
+            if (Math.hypot(first.x - last.x, first.z - last.z) > 0.03) {
+              throw new Error('NYC building footprint ring is not closed: ' + building.id);
+            }
+          }
+        }
+      }
+      this.assertActive();
       this.cache.set(record.id, tile);
       while (this.cache.size > Math.max(1, this.maxCachedTiles)) {
         const oldest = this.cache.keys().next().value as string | undefined;

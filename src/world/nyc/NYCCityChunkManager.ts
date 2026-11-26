@@ -545,6 +545,9 @@ export class NYCCityChunkManager {
           minZ: cz * CITY_CHUNK_SIZE_M,
           maxZ: (cz + 1) * CITY_CHUNK_SIZE_M,
         });
+        if (buildingTiles.length === 0) {
+          throw new Error('No authoritative NYC building tiles cover requested world chunk ' + key + '.');
+        }
         buildingFootprints = buildingTiles.flatMap((tile) => tile.buildings);
       }
       if (this.disposed || !this.desired.has(key) || this.chunks.has(key)) return;
