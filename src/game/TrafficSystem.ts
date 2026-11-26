@@ -5,7 +5,8 @@ import {
   CityRoadGraph,
   CityTrafficController,
 } from '../world/nyc/CityRoadGraph';
-import type { CityLanePose, CityRoadAxis, CityRoadEdge } from '../world/nyc/CityRoadGraph';
+import type { CityIntersection, CityLanePose, CityRoadAxis, CityRoadEdge } from '../world/nyc/CityRoadGraph';
+import { NYCGISRoadGraph } from '../world/nyc/NYCGISRoadGraph';
 
 interface TrafficVehicle {
   id: string;
@@ -115,6 +116,32 @@ export class TrafficSystem {
 
   reset(playerPosition: THREE.Vector3): void {
     this.controller.reset();
+    if (this.graph instanceof NYCGISRoadGraph) {
+      const edges = this.graph.getDirectedEdgesNear(
+        playerPosition.x + this.originOffset.x,
+        playerPosition.z + this.originOffset.z,
+        900,
+        Math.max(16, this.vehicles.length * 8),
+      );
+      for (let i = 0; i < this.vehicles.length; i++) {
+        const vehicle = this.vehicles[i];
+        const edge = edges[(i * 7) % Math.max(1, edges.length)];
+        if (!edge) continue;
+        const segment = this.graph.getSegment(edge.segmentId);
+        vehicle.edge = { ...edge };
+        vehicle.nextEdge = null;
+        vehicle.laneIndex = i % segment.profile.lanesPerDirection;
+        vehicle.progress = Math.min(14 + (i % 4) * 16, Math.max(0, segment.lengthM - 12));
+        vehicle.speed = 0;
+        vehicle.waitingAt = null;
+        vehicle.stoppedSeconds = 0;
+        vehicle.turnCount = 0;
+        vehicle.transitionFrom = null;
+        this.placeVehicle(vehicle);
+      }
+      this.updateSignalInfrastructure(playerPosition);
+      return;
+    }
     const baseX = Math.round((playerPosition.x + this.originOffset.x) / CITY_BLOCK_SPACING_M);
     const baseZ = Math.round((playerPosition.z + this.originOffset.z) / CITY_BLOCK_SPACING_M);
     const offsets = [
@@ -325,6 +352,44 @@ export class TrafficSystem {
     root.add(pole, head);
   }
 
+  private createGISSignalAssembly(node: CityIntersection): TrafficSignalAssembly {
+    const root = new THREE.Group();
+    root.name = 'traffic-signals-' + node.id;
+    root.position.set(
+      node.position.x - this.originOffset.x,
+      node.position.y - this.originOffset.y,
+      node.position.z - this.originOffset.z,
+    );
+    const approaches: TrafficSignalApproach[] = [];
+    const seen = new Set<string>();
+    if (!(this.graph instanceof NYCGISRoadGraph)) {
+      return { intersectionId: node.id, root, approaches };
+    }
+    for (const edge of this.graph.getIncomingEdges(node.id)) {
+      const segment = this.graph.getSegment(edge.segmentId);
+      const pose = this.graph.getCenterlinePose(segment.id, segment.lengthM, edge.direction);
+      const axis: CityRoadAxis = Math.abs(pose.tangent.x) >= Math.abs(pose.tangent.z) ? 'x' : 'z';
+      const component = axis === 'x' ? pose.tangent.x : pose.tangent.z;
+      const direction: 1 | -1 = component >= 0 ? 1 : -1;
+      const key = axis + ':' + direction;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const approach: TrafficSignalApproach = {
+        axis,
+        direction,
+        lamps: this.createSignalLamps(),
+        arrowMaterial: this.createSignalArrowMaterial(),
+      };
+      const offset = segment.profile.widthM * 0.5 + 1.8;
+      const x = -pose.tangent.x * 5 + pose.right.x * offset;
+      const z = -pose.tangent.z * 5 + pose.right.z * offset;
+      this.createSignalHead(root, x, z, pose.yaw + Math.PI, approach);
+      approaches.push(approach);
+    }
+    this.scene.add(root);
+    return { intersectionId: node.id, root, approaches };
+  }
+
   private createSignalAssembly(gridX: number, gridZ: number): TrafficSignalAssembly {
     const intersectionId = this.graph.getIntersectionId(gridX, gridZ);
     const root = new THREE.Group();
@@ -355,6 +420,40 @@ export class TrafficSystem {
   }
 
   private updateSignalInfrastructure(playerPosition: THREE.Vector3): void {
+    if (this.graph instanceof NYCGISRoadGraph) {
+      const x = playerPosition.x + this.originOffset.x;
+      const z = playerPosition.z + this.originOffset.z;
+      const key = Math.floor(x / 400) + ':' + Math.floor(z / 400);
+      if (this.signalCentreKey !== key) {
+        this.clearSignalInfrastructure();
+        this.signalCentreKey = key;
+        const nodes = this.graph.getIntersectionsInBounds({
+          minX: x - 760, maxX: x + 760,
+          minZ: z - 760, maxZ: z + 760,
+        });
+        for (const node of nodes) {
+          if (node.signalControlled
+            && this.graph.getIncomingEdges(node.id).length >= 2
+            && this.graph.getOutgoingEdges(node.id).length >= 2) {
+            this.signalAssemblies.push(this.createGISSignalAssembly(node));
+          }
+        }
+      }
+      for (const assembly of this.signalAssemblies) {
+        for (const approach of assembly.approaches) {
+          this.setSignalLamps(
+            approach.lamps,
+            this.controller.getSignalState(assembly.intersectionId, approach.axis),
+          );
+          const left = this.controller.getProtectedLeftTurnState(
+            assembly.intersectionId, approach.axis, approach.direction,
+          );
+          approach.arrowMaterial.emissiveIntensity = left === 'green' ? 3.25 : 0.025;
+          approach.arrowMaterial.toneMapped = false;
+        }
+      }
+      return;
+    }
     const gridX = Math.round((playerPosition.x + this.originOffset.x) / CITY_BLOCK_SPACING_M);
     const gridZ = Math.round((playerPosition.z + this.originOffset.z) / CITY_BLOCK_SPACING_M);
     const centreKey = gridX + ':' + gridZ;
@@ -401,6 +500,23 @@ export class TrafficSystem {
   }
 
   private createPool(playerSpawn: THREE.Vector3): void {
+    if (this.graph instanceof NYCGISRoadGraph) {
+      const edges = this.graph.getDirectedEdgesNear(
+        playerSpawn.x + this.originOffset.x,
+        playerSpawn.z + this.originOffset.z,
+        900,
+        POOL_SIZE * 8,
+      );
+      for (let i = 0; i < POOL_SIZE; i++) {
+        const edge = edges[(i * 7 + 1) % Math.max(1, edges.length)];
+        if (!edge) break;
+        const segment = this.graph.getSegment(edge.segmentId);
+        const lane = i % segment.profile.lanesPerDirection;
+        const progress = Math.min(18 + (i % 4) * 15, Math.max(0, segment.lengthM - 12));
+        this.vehicles.push(this.createVehicle(i, edge, lane, progress));
+      }
+      return;
+    }
     const baseX = Math.round((playerSpawn.x + this.originOffset.x) / CITY_BLOCK_SPACING_M);
     const baseZ = Math.round((playerSpawn.z + this.originOffset.z) / CITY_BLOCK_SPACING_M);
     const offsets = [

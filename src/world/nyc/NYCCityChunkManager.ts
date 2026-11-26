@@ -6,6 +6,8 @@ import {
   CityRoadGraph,
 } from './CityRoadGraph';
 import type { CityRoadSegment } from './CityRoadGraph';
+import { NYCGISRoadGraph } from './NYCGISRoadGraph';
+import { NYCStreetNetworkLoader } from './NYCStreetNetworkLoader';
 import {
   CitySpatialIndex,
   citySpatialHash,
@@ -285,6 +287,7 @@ export class NYCCityChunkManager {
     private readonly scene: THREE.Scene,
     private readonly physics: RAPIER.World,
     readonly graph: CityRoadGraph,
+    private readonly streetLoader: NYCStreetNetworkLoader | null = null,
   ) {
     this.scene.background = new THREE.Color(0x929fa6);
     this.scene.fog = new THREE.FogExp2(0x929fa6, 0.00085);
@@ -440,6 +443,12 @@ export class NYCCityChunkManager {
    * survey-grade New York elevation data.
    */
   private sampleTerrainHeight(worldX: number, worldZ: number): number {
+    if (this.graph instanceof NYCGISRoadGraph) {
+      // The currently integrated CSCL source is predominantly 2D. A flat
+      // zero datum is explicit until a validated NYC DEM is added to the bake.
+      return isHudsonWater(worldX, worldZ)
+        ? -getHudsonRiverDepthM(worldX, worldZ) - 1.25 : 0;
+    }
     if (isHudsonWater(worldX, worldZ)) {
       return -getHudsonRiverDepthM(worldX, worldZ) - 1.25;
     }
@@ -509,7 +518,18 @@ export class NYCCityChunkManager {
     if (this.disposed || !this.desired.has(key) || this.chunks.has(key)) return;
     const inFlight = this.pending.get(key);
     if (inFlight) return inFlight;
-    const request = Promise.resolve().then(() => {
+    const request = Promise.resolve().then(async () => {
+      if (this.disposed || !this.desired.has(key) || this.chunks.has(key)) return;
+      if (this.graph instanceof NYCGISRoadGraph) {
+        if (!this.streetLoader) throw new Error('GIS chunk streaming requires NYC street tile loader.');
+        const tiles = await this.streetLoader.loadTilesForBounds({
+          minX: cx * CITY_CHUNK_SIZE_M - 24,
+          maxX: (cx + 1) * CITY_CHUNK_SIZE_M + 24,
+          minZ: cz * CITY_CHUNK_SIZE_M - 24,
+          maxZ: (cz + 1) * CITY_CHUNK_SIZE_M + 24,
+        });
+        this.graph.addTiles(tiles);
+      }
       if (this.disposed || !this.desired.has(key) || this.chunks.has(key)) return;
       const chunk = this.buildChunk(cx, cz);
       this.chunks.set(key, chunk);
@@ -528,7 +548,7 @@ export class NYCCityChunkManager {
     const minZ = cz * CITY_CHUNK_SIZE_M;
     const maxZ = minZ + CITY_CHUNK_SIZE_M;
     const group = new THREE.Group();
-    group.name = 'fictional-city-chunk-' + key;
+    group.name = 'nyc-gis-world-chunk-' + key;
     group.position.set(centerX - this.originOffset.x, -this.originOffset.y, centerZ - this.originOffset.z);
 
     const groundPositions: number[] = [], groundIndices: number[] = [];
@@ -588,6 +608,49 @@ export class NYCCityChunkManager {
     const firstZ = Math.floor(minZ / CITY_BLOCK_SPACING_M) - 1;
     const lastZ = Math.ceil(maxZ / CITY_BLOCK_SPACING_M) + 1;
 
+    if (this.graph instanceof NYCGISRoadGraph) {
+      const segments = this.graph.getSegmentsInBounds(minX - 8, maxX + 8, minZ - 8, maxZ + 8);
+      for (const segment of segments) {
+        roadLines.add(segment.id);
+        const elevated = segment.roadType !== 'surface';
+        if (elevated) {
+          this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+            elevatedRoadPositions, elevatedRoadIndices, segment.profile.widthM, 0.035, 0);
+          this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+            elevatedUndersidePositions, elevatedUndersideIndices, segment.profile.widthM, -1.2, 0);
+        } else {
+          this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+            roadPositions, roadIndices, segment.profile.widthM, 0.035, 0);
+          for (const side of [-1, 1]) {
+            this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+              sidewalkPositions, sidewalkIndices, 3.2, 0.12,
+              side * (segment.profile.widthM * 0.5 + 2.0));
+          }
+        }
+        if (segment.profile.directionality === 'both') {
+          for (const offset of [-0.17, 0.17]) {
+            this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+              yellowPositions, yellowIndices, 0.12, 0.065, offset);
+          }
+          for (const side of [-1, 1]) {
+            for (let lane = 1; lane < segment.profile.lanesPerDirection; lane++) {
+              const offset = side * (segment.profile.lanesPerDirection - lane)
+                * segment.profile.laneWidthM;
+              this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+                whitePositions, whiteIndices, 0.105, 0.065, offset);
+            }
+          }
+        } else {
+          for (let lane = 1; lane < segment.profile.lanesPerDirection; lane++) {
+            const offset = (segment.profile.lanesPerDirection * 0.5 - lane)
+              * segment.profile.laneWidthM;
+            this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
+              whitePositions, whiteIndices, 0.105, 0.065, offset);
+          }
+        }
+        if (elevated) this.collectBridgeDetails(segment, chunkBounds, barrierSpecs, pierSpecs, capSpecs);
+      }
+    } else {
     for (let line = firstX; line <= lastX; line++) {
       const x = line * CITY_BLOCK_SPACING_M;
       const profile = this.graph.getRoadProfile('z', line);
@@ -663,11 +726,17 @@ export class NYCCityChunkManager {
       }
     }
 
-    this.addCrosswalks(firstX, lastX, firstZ, lastZ, centerX, centerZ, crosswalkPositions, crosswalkIndices);
+    if (!(this.graph instanceof NYCGISRoadGraph)) {
+      this.addCrosswalks(firstX, lastX, firstZ, lastZ, centerX, centerZ, crosswalkPositions, crosswalkIndices);
+    }
+
+    }
 
     // Elevated decks and ramps are sampled from the authoritative graph. Each
     // chunk emits only the curve intervals whose centreline midpoint it owns.
-    const specialSegments = this.graph.getSpecialSegmentsInBounds(minX, maxX, minZ, maxZ);
+    const specialSegments = this.graph instanceof NYCGISRoadGraph
+      ? []
+      : this.graph.getSpecialSegmentsInBounds(minX, maxX, minZ, maxZ);
     for (const segment of specialSegments) {
       this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
         elevatedRoadPositions, elevatedRoadIndices, segment.profile.widthM, 0, 0);
@@ -746,10 +815,14 @@ export class NYCCityChunkManager {
       group.add(mesh);
     }
 
-    const buildingSpecs = this.collectBuildings(minX, maxX, minZ, maxZ);
+    const buildingSpecs = this.graph instanceof NYCGISRoadGraph
+      ? []
+      : this.collectBuildings(minX, maxX, minZ, maxZ);
     // Neighbour footprints are indexed as well, so a prop generated at a chunk
     // edge cannot overlap a building owned by the adjacent streamed chunk.
-    const nearbyBuildings = this.collectBuildings(minX - 64, maxX + 64, minZ - 64, maxZ + 64);
+    const nearbyBuildings = this.graph instanceof NYCGISRoadGraph
+      ? []
+      : this.collectBuildings(minX - 64, maxX + 64, minZ - 64, maxZ + 64);
     const propPlacementIndex = new CitySpatialIndex<string>(24);
     for (const building of nearbyBuildings) {
       propPlacementIndex.insert(
@@ -895,12 +968,15 @@ export class NYCCityChunkManager {
       group.add(mesh);
     }
 
-    this.addStreetFurniture(
-      group, centerX, centerZ, chunkBounds,
-      propPlacementIndex, streetColliderSpecs, nightLights,
-    );
+    if (!(this.graph instanceof NYCGISRoadGraph)) {
+      this.addStreetFurniture(
+        group, centerX, centerZ, chunkBounds,
+        propPlacementIndex, streetColliderSpecs, nightLights,
+      );
+    }
     this.addBridgeInstances(group, centerX, centerZ, barrierSpecs, pierSpecs, capSpecs);
-    const hasUnderpassShell = minX <= 0 && maxX > 0 && minZ <= 320 && maxZ > 320;
+    const hasUnderpassShell = !(this.graph instanceof NYCGISRoadGraph)
+      && minX <= 0 && maxX > 0 && minZ <= 320 && maxZ > 320;
     if (hasUnderpassShell) this.addUnderpassShell(group, centerX, centerZ);
 
     const body = this.physics.createRigidBody(RAPIER.RigidBodyDesc.fixed()
