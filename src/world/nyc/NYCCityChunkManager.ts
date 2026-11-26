@@ -528,6 +528,9 @@ export class NYCCityChunkManager {
           minZ: cz * CITY_CHUNK_SIZE_M - 24,
           maxZ: (cz + 1) * CITY_CHUNK_SIZE_M + 24,
         });
+        if (tiles.length === 0) {
+          throw new Error('No authoritative NYC GIS tiles cover requested world chunk ' + key + '.');
+        }
         this.graph.addTiles(tiles);
       }
       if (this.disposed || !this.desired.has(key) || this.chunks.has(key)) return;

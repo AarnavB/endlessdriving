@@ -62,6 +62,78 @@ for (const [id, edge] of expected) assert.ok(actual.has(id), 'missing drivable e
 assert.ok(tileEdgeRows >= actual.size, 'boundary-spanning edges may be repeated, never lost');
 assert.equal(manifest.graph.drivableEdgeCount, expected.size);
 
+// Exercise the actual TypeScript GIS graph implementation against a directed fixture.
+// Compile the two TypeScript modules into data URLs so the regression can run in Node
+// without adding a test-only runtime dependency or importing the browser game bundle.
+import ts from 'typescript';
+
+const toModuleUrl = (source) => 'data:text/javascript;base64,' + Buffer.from(ts.transpileModule(source, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+}).outputText).toString('base64');
+
+const waterfrontSource = await readFile('src/world/nyc/NYCWaterfrontLayout.ts','utf8');
+const waterfrontUrl = toModuleUrl(waterfrontSource);
+const cityGraphSource = (await readFile('src/world/nyc/CityRoadGraph.ts','utf8'))
+  .replace('"./NYCWaterfrontLayout"', JSON.stringify(waterfrontUrl));
+const cityGraphUrl = toModuleUrl(cityGraphSource);
+const gisGraphSource = (await readFile('src/world/nyc/NYCGISRoadGraph.ts','utf8'))
+  .replace("'./CityRoadGraph'", JSON.stringify(cityGraphUrl));
+const gisGraphUrl = toModuleUrl(gisGraphSource);
+const { NYCGISRoadGraph } = await import(gisGraphUrl);
+
+const makeNode = (id,x,z,degree) => ({
+  id, position:{x,y:0,z}, levelCode:13, degree,
+  incidentEdgeIds:[], incomingEdgeIds:[], outgoingEdgeIds:[],
+});
+const makeEdge = (id,fromNodeId,toNodeId,directionality,allowedDirections,geometry) => ({
+  id, sourceFeatureId:id, physicalId:null, fromNodeId,toNodeId,
+  fromLevelCode:13,toLevelCode:13,
+  trafficDirection:directionality==='both'?'TW':directionality==='forward'?'FT':'TF',
+  directionality, allowedDirections, roadwayType:'street', roadwayTypeCode:1,
+  streetName:id, widthM:10, numberTravelLanes:1, numberTotalLanes:1,
+  postedSpeedSourceValue:25, lengthM:geometry.reduce((sum,p,i)=>i
+    ? sum+Math.hypot(p.x-geometry[i-1].x,p.y-geometry[i-1].y,p.z-geometry[i-1].z):0,0),
+  geometry,
+});
+const fixture = {
+  schema:'endless-driving.nyc-street-tile', schemaVersion:1, id:'fixture',
+  bounds:{minX:-10,maxX:210,minZ:-10,maxZ:110},
+  graph:{
+    nodes:[
+      makeNode('n0',0,0,1),makeNode('n1',100,0,2),makeNode('n2',100,100,1),
+    ],
+    edges:[
+      makeEdge('one-way','n0','n1','forward',['forward'],[
+        {x:0,y:0,z:0},{x:50,y:0,z:0},{x:100,y:0,z:0},
+      ]),
+      makeEdge('two-way','n1','n2','both',['forward','reverse'],[
+        {x:100,y:0,z:0},{x:100,y:0,z:50},{x:100,y:0,z:100},
+      ]),
+    ],
+  },
+};
+const runtimeGraph = new NYCGISRoadGraph([fixture],{x:0,y:0,z:0});
+assert.equal(runtimeGraph.isGISBacked,true);
+assert.equal(runtimeGraph.getSegment('one-way').geometry.length,3,
+  'runtime graph must preserve every source polyline vertex');
+assert.equal(runtimeGraph.getOutgoingEdges('n0').length,1);
+assert.equal(runtimeGraph.getOutgoingEdges('n0')[0].direction,1);
+assert.equal(runtimeGraph.getOutgoingEdges('n1').length,1,
+  'one-way road must not be traversable in reverse');
+assert.equal(runtimeGraph.findRoute('n0','n2').length,2,
+  'A* route must use connected directed GIS edges');
+assert.throws(() => runtimeGraph.findRoute('n2','n0'),
+  /No directed route exists/,
+  'routefinding must reject a prohibited reverse traversal');
+assert.throws(() => runtimeGraph.getIntersectionId(0,0),
+  /Grid intersection IDs are disabled/,
+  'runtime GIS graph must not synthesize grid intersections');
+const nearest = runtimeGraph.getNearestLanePose(47,2,1,0,0);
+assert.ok(Math.abs(nearest.position.x-47)<1.5 && Math.abs(nearest.position.z)<1.5,
+  'nearest drivable-lane query must resolve the source polyline');
+assert.ok(runtimeGraph.getDirectedEdgesNear(40,0,100,8).some((edge)=>edge.segmentId==='one-way'),
+  'traffic lookup must return directed road edges');
+
 const game = await readFile('src/game/Game.ts','utf8');
 const graph = await readFile('src/world/nyc/NYCGISRoadGraph.ts','utf8');
 const manager = await readFile('src/world/nyc/NYCCityChunkManager.ts','utf8');
