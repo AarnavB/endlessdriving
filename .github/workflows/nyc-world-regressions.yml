@@ -30,7 +30,7 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Bake live NYC roads and building footprints
+      - name: Bake live NYC roads, building footprints and NYC 2017 DEM terrain
         id: nyc_bake
         run: npm run bake:nyc:world
         continue-on-error: true
@@ -45,8 +45,15 @@ jobs:
             public/data/nyc/manifest.json
             public/data/nyc/tiles/
             public/data/nyc/buildings/
+            public/data/nyc/terrain/
           retention-days: 14
           if-no-files-found: error
+      - name: Validate NYC 2017 DEM tile integrity and coverage
+        id: nyc_terrain
+        if: always() && steps.nyc_bake.outcome == 'success'
+        run: npm run test:nyc-terrain
+        continue-on-error: true
+
       - name: TypeScript and production build
         id: build
         if: always() && steps.nyc_bake.outcome == 'success'
@@ -100,6 +107,7 @@ jobs:
           WORLD_RESULT: ${{ steps.world.outcome }}
           NYC_BAKE_RESULT: ${{ steps.nyc_bake.outcome }}
           NYC_GRAPH_RESULT: ${{ steps.nyc_graph.outcome }}
+          NYC_TERRAIN_RESULT: ${{ steps.nyc_terrain.outcome }}
         run: |
           printf 'build: %s\n' "$BUILD_RESULT"
           printf 'test:drivetrain: %s\n' "$DRIVETRAIN_RESULT"
@@ -115,6 +123,8 @@ jobs:
           test "$CITY_ROUTING_RESULT" = success
           test "$WORLD_RESULT" = success
           printf 'test:nyc-road-graph: %s\\n' "$NYC_GRAPH_RESULT"
+          printf 'test:nyc-terrain: %s\\n' "$NYC_TERRAIN_RESULT"
           test "$BUILD_RESULT" = success
           test "$NYC_BAKE_RESULT" = success
           test "$NYC_GRAPH_RESULT" = success
+          test "$NYC_TERRAIN_RESULT" = success
