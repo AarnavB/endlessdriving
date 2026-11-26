@@ -42,6 +42,8 @@ const trafficTemp = resolve(root, 'src/game/.TrafficSystem.regression.mjs');
 const gisGraphTemp = resolve(root, 'src/world/nyc/.NYCGISRoadGraph.regression.mjs');
 const streetLoaderTemp = resolve(root, 'src/world/nyc/.NYCStreetNetworkLoader.regression.mjs');
 const buildingLoaderTemp = resolve(root, 'src/world/nyc/.NYCBuildingFootprintLoader.regression.mjs');
+const terrainLoaderTemp = resolve(root, 'src/world/nyc/.NYCTerrainLoader.regression.mjs');
+const geoTemp = resolve(root, 'src/world/nyc/.NYCGeo.regression.mjs');
 let physics;
 let manager;
 let traffic;
@@ -49,6 +51,8 @@ try {
   await writeFile(gisGraphTemp, 'export class NYCGISRoadGraph {}', 'utf8');
   await writeFile(streetLoaderTemp, 'export class NYCStreetNetworkLoader {}', 'utf8');
   await writeFile(buildingLoaderTemp, 'export class NYCBuildingFootprintLoader {}', 'utf8');
+  await writeFile(terrainLoaderTemp, 'export class NYCTerrainLoader {}', 'utf8');
+  await writeFile(geoTemp, 'export function localBoundsToGeographic(bounds) { return bounds; }', 'utf8');
   await transpile(waterfrontLayoutPath, waterfrontLayoutTemp);
   await transpile(graphPath, graphTemp, [
     ['from "./NYCWaterfrontLayout"', 'from "./.NYCWaterfrontLayout.regression.mjs"'],
@@ -61,6 +65,8 @@ try {
     ["from './NYCGISRoadGraph'", "from './.NYCGISRoadGraph.regression.mjs'"],
     ["from './NYCStreetNetworkLoader'", "from './.NYCStreetNetworkLoader.regression.mjs'"],
     ["from './NYCBuildingFootprintLoader'", "from './.NYCBuildingFootprintLoader.regression.mjs'"],
+    ["from './NYCTerrainLoader'", "from './.NYCTerrainLoader.regression.mjs'"],
+    ["from './NYCGeo'", "from './.NYCGeo.regression.mjs'"],
   ]);
   await transpile(trafficPath, trafficTemp, [
     ["from '../world/nyc/CityRoadGraph'", "from '../world/nyc/.CityRoadGraph.regression.mjs'"],
@@ -779,5 +785,7 @@ try {
     rm(gisGraphTemp, { force: true }),
     rm(streetLoaderTemp, { force: true }),
     rm(buildingLoaderTemp, { force: true }),
+    rm(terrainLoaderTemp, { force: true }),
+    rm(geoTemp, { force: true }),
   ]);
 }
