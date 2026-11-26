@@ -30,20 +30,21 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Bake live NYC CSCL street network
+      - name: Bake live NYC roads and building footprints
         id: nyc_bake
-        run: npm run bake:nyc:roads
+        run: npm run bake:nyc:world
         continue-on-error: true
 
       - name: Retain baked NYC road data
         if: steps.nyc_bake.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: nyc-cscl-street-network-${{ github.sha }}
+          name: nyc-gis-world-${{ github.sha }}
           path: |
             public/data/nyc/manhattan-street-network.json
             public/data/nyc/manifest.json
             public/data/nyc/tiles/
+            public/data/nyc/buildings/
           retention-days: 14
           if-no-files-found: error
       - name: TypeScript and production build
@@ -106,7 +107,7 @@ jobs:
           printf 'test:city-urban: %s\n' "$CITY_URBAN_RESULT"
           printf 'test:city-routing: %s\n' "$CITY_ROUTING_RESULT"
           printf 'test:world: %s\n' "$WORLD_RESULT"
-          printf 'bake:nyc:roads: %s\n' "$NYC_BAKE_RESULT"
+          printf 'bake:nyc:world: %s\n' "$NYC_BAKE_RESULT"
           test "$BUILD_RESULT" = success
           test "$DRIVETRAIN_RESULT" = success
           test "$NYC_GEO_RESULT" = success

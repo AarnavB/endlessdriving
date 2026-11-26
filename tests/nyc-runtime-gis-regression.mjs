@@ -19,6 +19,57 @@ assert.ok(manifest.tileSizeM > 0);
 assert.ok(manifest.graph.drivableEdgeCount > 0);
 assert.ok(Number.isFinite(manifest.spawnPosition.x) && Number.isFinite(manifest.spawnPosition.z));
 
+
+const buildingRoot = resolve(root, 'buildings');
+const buildingManifestBytes = await readFile(resolve(buildingRoot, 'manifest.json'));
+const buildingManifest = JSON.parse(buildingManifestBytes.toString('utf8'));
+assert.equal(buildingManifest.schema, 'endless-driving.nyc-building-network');
+assert.equal(buildingManifest.schemaVersion, 1);
+assert.equal(buildingManifest.source.datasetId, '5zhs-2jue');
+assert.deepEqual(buildingManifest.bounds, manifest.bounds);
+assert.ok(buildingManifest.counts.retainedBuildings > 0);
+assert.ok(buildingManifest.tiles.length > 0);
+assert.equal(buildingManifest.counts.tiles, buildingManifest.tiles.length);
+
+const uniqueBuildings = new Map();
+let buildingTileRows = 0;
+for (const record of buildingManifest.tiles) {
+  const bytes = await readFile(resolve(buildingRoot, record.path));
+  assert.equal(bytes.byteLength, record.bytes, 'building tile bytes: ' + record.id);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), record.sha256,
+    'building tile checksum: ' + record.id);
+  const tile = JSON.parse(bytes.toString('utf8'));
+  assert.equal(tile.schema, 'endless-driving.nyc-building-tile');
+  assert.equal(tile.schemaVersion, 1);
+  assert.equal(tile.id, record.id);
+  assert.equal(tile.buildings.length, record.buildingCount);
+  for (const building of tile.buildings) {
+    buildingTileRows++;
+    assert.ok(building.id);
+    assert.ok(Number.isFinite(building.heightM) && building.heightM >= 2.5);
+    assert.ok(['height_roof','feature-code-median','configurable-fallback'].includes(building.heightSource));
+    assert.ok(Array.isArray(building.polygons) && building.polygons.length > 0);
+    for (const polygon of building.polygons) {
+      assert.ok(polygon.length > 0);
+      for (const ring of polygon) {
+        assert.ok(ring.length >= 4);
+        const first = ring[0], last = ring.at(-1);
+        assert.ok(Math.hypot(first.x-last.x,first.z-last.z)<0.03,
+          'building footprint rings must be explicitly closed');
+        for (const point of ring) assert.ok(Number.isFinite(point.x) && Number.isFinite(point.z));
+      }
+    }
+    assert.ok(!uniqueBuildings.has(building.id), 'a footprint is owned by exactly one spatial tile');
+    uniqueBuildings.set(building.id, building);
+  }
+}
+assert.equal(uniqueBuildings.size, buildingManifest.counts.retainedBuildings);
+assert.equal(buildingTileRows, buildingManifest.counts.retainedBuildings);
+assert.equal(
+  buildingManifest.counts.sourceHeightCount + buildingManifest.counts.inferredHeightCount,
+  buildingManifest.counts.retainedBuildings,
+);
+
 const expected = new Map(network.graph.edges
   .filter((edge) => Array.isArray(edge.allowedDirections) && edge.allowedDirections.length > 0)
   .map((edge) => [edge.id, edge]));
@@ -145,6 +196,9 @@ assert.match(graph,/super\(20261126,false\)/,'GIS graph must not build the proce
 assert.match(graph,/getIntersectionId\(_x:number,_z:number/,'grid intersection lookup is disabled');
 assert.match(manager,/loadTilesForBounds/,'world streaming requests GIS tiles for chunks');
 assert.match(manager,/instanceof NYCGISRoadGraph/,'physical road generation branches on authoritative GIS graph');
+assert.match(manager,/NYCBuildingFootprintLoader/,'GIS world requires the authoritative building loader');
+assert.match(manager,/ExtrudeGeometry/,'building footprints are extruded from source polygons');
+assert.match(manager,/nyc-authoritative-building-footprints/,'rendered buildings are named as source footprint geometry');
 assert.match(traffic,/getDirectedEdgesNear/,'traffic spawn is selected from nearby directed GIS edges');
 assert.match(traffic,/instanceof NYCGISRoadGraph/,'traffic has a dedicated GIS runtime path');
 
@@ -156,11 +210,29 @@ try {
   const builtTile = manifest.tiles[0];
   const builtTileBytes = await readFile(resolve('dist/data/nyc',builtTile.path));
   assert.equal(createHash('sha256').update(builtTileBytes).digest('hex'),builtTile.sha256,
-    'Vite bundle carries a valid tile asset');
+    'Vite bundle carries a valid road tile asset');
+  const builtBuildingManifest = JSON.parse(
+    (await readFile(resolve('dist/data/nyc/buildings/manifest.json'))).toString('utf8'),
+  );
+  assert.equal(builtBuildingManifest.counts.retainedBuildings,buildingManifest.counts.retainedBuildings,
+    'Vite bundle carries the matching building manifest');
+  const builtBuildingTile = buildingManifest.tiles[0];
+  const builtBuildingBytes = await readFile(resolve('dist/data/nyc/buildings',builtBuildingTile.path));
+  assert.equal(createHash('sha256').update(builtBuildingBytes).digest('hex'),builtBuildingTile.sha256,
+    'Vite bundle carries a validated building tile');
 } catch (error) {
   if (error?.code === 'ENOENT') {
     throw new Error('Production dist is missing NYC GIS assets. Run npm run build:app after the bake.',{cause:error});
   }
   throw error;
 }
-console.log(JSON.stringify({result:'PASS',uniqueDrivableEdges:actual.size,tileCount:manifest.tiles.length,tileEdgeRows,distAssets:'verified'}));
+console.log(JSON.stringify({
+  result:'PASS',
+  uniqueDrivableEdges:actual.size,
+  roadTileCount:manifest.tiles.length,
+  tileEdgeRows,
+  retainedBuildings:uniqueBuildings.size,
+  buildingTileCount:buildingManifest.tiles.length,
+  buildingTileRows,
+  distAssets:'roads-and-buildings-verified',
+}));

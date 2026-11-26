@@ -41,12 +41,14 @@ const waterfrontLayoutTemp = resolve(root, 'src/world/nyc/.NYCWaterfrontLayout.r
 const trafficTemp = resolve(root, 'src/game/.TrafficSystem.regression.mjs');
 const gisGraphTemp = resolve(root, 'src/world/nyc/.NYCGISRoadGraph.regression.mjs');
 const streetLoaderTemp = resolve(root, 'src/world/nyc/.NYCStreetNetworkLoader.regression.mjs');
+const buildingLoaderTemp = resolve(root, 'src/world/nyc/.NYCBuildingFootprintLoader.regression.mjs');
 let physics;
 let manager;
 let traffic;
 try {
   await writeFile(gisGraphTemp, 'export class NYCGISRoadGraph {}', 'utf8');
   await writeFile(streetLoaderTemp, 'export class NYCStreetNetworkLoader {}', 'utf8');
+  await writeFile(buildingLoaderTemp, 'export class NYCBuildingFootprintLoader {}', 'utf8');
   await transpile(waterfrontLayoutPath, waterfrontLayoutTemp);
   await transpile(graphPath, graphTemp, [
     ['from "./NYCWaterfrontLayout"', 'from "./.NYCWaterfrontLayout.regression.mjs"'],
@@ -58,6 +60,7 @@ try {
     ["from './CityUrbanModel'", "from './.CityUrbanModel.regression.mjs'"],
     ["from './NYCGISRoadGraph'", "from './.NYCGISRoadGraph.regression.mjs'"],
     ["from './NYCStreetNetworkLoader'", "from './.NYCStreetNetworkLoader.regression.mjs'"],
+    ["from './NYCBuildingFootprintLoader'", "from './.NYCBuildingFootprintLoader.regression.mjs'"],
   ]);
   await transpile(trafficPath, trafficTemp, [
     ["from '../world/nyc/CityRoadGraph'", "from '../world/nyc/.CityRoadGraph.regression.mjs'"],
@@ -341,8 +344,8 @@ try {
   const vehicleSource = await readFile(resolve(root, 'src/vehicles/VehicleController.ts'), 'utf8');
   assert(!/RoadPath|RoadChunkManager/.test(gameSource), 'Game.ts no longer depends on the scalar highway system');
   assert(/new NYCGISRoadGraph/.test(gameSource), 'Game constructs the authoritative GIS graph');
-  assert(/new NYCCityChunkManager\(this\.scene, this\.physics, this\.roadGraph, this\.streetLoader\)/.test(gameSource),
-    'game initialization streams GIS world geometry from the validated tile loader');
+  assert(/new NYCCityChunkManager\([\s\S]*this\.streetLoader,[\s\S]*this\.buildingLoader/.test(gameSource),
+    'game initialization streams authoritative road and building tiles into the GIS world');
   assert(/new TrafficSystem\(this\.physics, this\.scene, this\.roadGraph, spawnPosition\)/.test(gameSource),
     'traffic uses the same authoritative graph');
   assert(/CityTrafficController/.test(trafficSource) && /getLanePose/.test(trafficSource),
@@ -775,5 +778,6 @@ try {
     rm(waterfrontLayoutTemp, { force: true }),
     rm(gisGraphTemp, { force: true }),
     rm(streetLoaderTemp, { force: true }),
+    rm(buildingLoaderTemp, { force: true }),
   ]);
 }
