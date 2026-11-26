@@ -7,6 +7,7 @@ import { NYCCityChunkManager } from '../world/nyc/NYCCityChunkManager';
 import { CityRoadGraph } from '../world/nyc/CityRoadGraph';
 import { NYCGISRoadGraph } from '../world/nyc/NYCGISRoadGraph';
 import { NYCStreetNetworkLoader } from '../world/nyc/NYCStreetNetworkLoader';
+import { NYCBuildingFootprintLoader } from '../world/nyc/NYCBuildingFootprintLoader';
 import { GooglePhotorealisticTiles } from '../world/nyc/GooglePhotorealisticTiles';
 import { NYCEnvironmentLighting } from '../world/nyc/NYCEnvironmentLighting';
 import { NYCWaterfrontSystem } from '../world/nyc/NYCWaterfrontSystem';
@@ -39,6 +40,7 @@ export class Game {
   private latestTelemetry: VehicleTelemetry | null = null;
   private readonly roadGraph: CityRoadGraph;
   private readonly streetLoader: NYCStreetNetworkLoader;
+  private readonly buildingLoader: NYCBuildingFootprintLoader;
   private readonly worldOffset = new THREE.Vector3();
   private worldScene!: NYCCityChunkManager;
   private waterfront!: NYCWaterfrontSystem;
@@ -69,9 +71,11 @@ export class Game {
     settings: GameSettings,
     roadGraph: CityRoadGraph,
     streetLoader: NYCStreetNetworkLoader,
+    buildingLoader: NYCBuildingFootprintLoader,
   ) {
     this.roadGraph = roadGraph;
     this.streetLoader = streetLoader;
+    this.buildingLoader = buildingLoader;
     this.manualTransmission = settings.transmission === 'manual';
     this.graphicsQuality = settings.graphics;
     this.renderer = new THREE.WebGLRenderer({
@@ -164,16 +168,18 @@ export class Game {
   static async create(canvas: HTMLCanvasElement, uiRoot: HTMLElement, settings: GameSettings): Promise<Game> {
     await RAPIER.init();
     const streetLoader = new NYCStreetNetworkLoader();
+    const buildingLoader = new NYCBuildingFootprintLoader();
     try {
       const initial = await streetLoader.loadInitialTiles();
       const roadGraph = new NYCGISRoadGraph(initial.tiles, initial.spawnPosition);
-      const game = new Game(canvas, uiRoot, settings, roadGraph, streetLoader);
+      const game = new Game(canvas, uiRoot, settings, roadGraph, streetLoader, buildingLoader);
       await game.initializePhysics();
       game.initializeGoogleTiles();
       game.startLoop();
       return game;
     } catch (error) {
       streetLoader.dispose();
+      buildingLoader.dispose();
       throw new Error(
         '[NYC GIS startup] Required NYC street assets could not be loaded or validated. '
           + 'No procedural grid fallback will be started.',
@@ -197,6 +203,7 @@ export class Game {
     this.waterfront.dispose();
     this.googleTiles?.dispose();
     this.streetLoader.dispose();
+    this.buildingLoader.dispose();
     this.environmentLighting.dispose(this.scene);
     this.renderer.dispose();
     this.physics.free();
@@ -280,7 +287,9 @@ export class Game {
     this.physics.numInternalPgsIterations = 2;
 
     const spawnPosition = this.getSpawnPosition();
-    const cityWorld = new NYCCityChunkManager(this.scene, this.physics, this.roadGraph, this.streetLoader);
+    const cityWorld = new NYCCityChunkManager(
+      this.scene, this.physics, this.roadGraph, this.streetLoader, this.buildingLoader,
+    );
     await cityWorld.initialize(spawnPosition);
     this.worldScene = cityWorld;
     this.waterfront = new NYCWaterfrontSystem(this.scene, this.physics, this.graphicsQuality);

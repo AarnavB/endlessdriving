@@ -8,6 +8,8 @@ import {
 import type { CityRoadSegment } from './CityRoadGraph';
 import { NYCGISRoadGraph } from './NYCGISRoadGraph';
 import { NYCStreetNetworkLoader } from './NYCStreetNetworkLoader';
+import { NYCBuildingFootprintLoader } from './NYCBuildingFootprintLoader';
+import type { NYCBuildingFootprint } from './NYCBuildingFootprintLoader';
 import {
   CitySpatialIndex,
   citySpatialHash,
@@ -288,6 +290,7 @@ export class NYCCityChunkManager {
     private readonly physics: RAPIER.World,
     readonly graph: CityRoadGraph,
     private readonly streetLoader: NYCStreetNetworkLoader | null = null,
+    private readonly buildingLoader: NYCBuildingFootprintLoader | null = null,
   ) {
     this.scene.background = new THREE.Color(0x929fa6);
     this.scene.fog = new THREE.FogExp2(0x929fa6, 0.00085);
@@ -533,8 +536,19 @@ export class NYCCityChunkManager {
         }
         this.graph.addTiles(tiles);
       }
+      let buildingFootprints: NYCBuildingFootprint[] = [];
+      if (this.graph instanceof NYCGISRoadGraph) {
+        if (!this.buildingLoader) throw new Error('GIS world streaming requires NYC building footprint loader.');
+        const buildingTiles = await this.buildingLoader.loadTilesForBounds({
+          minX: cx * CITY_CHUNK_SIZE_M,
+          maxX: (cx + 1) * CITY_CHUNK_SIZE_M,
+          minZ: cz * CITY_CHUNK_SIZE_M,
+          maxZ: (cz + 1) * CITY_CHUNK_SIZE_M,
+        });
+        buildingFootprints = buildingTiles.flatMap((tile) => tile.buildings);
+      }
       if (this.disposed || !this.desired.has(key) || this.chunks.has(key)) return;
-      const chunk = this.buildChunk(cx, cz);
+      const chunk = this.buildChunk(cx, cz, buildingFootprints);
       this.chunks.set(key, chunk);
       this.scene.add(chunk.group);
     }).finally(() => this.pending.delete(key));
@@ -542,7 +556,11 @@ export class NYCCityChunkManager {
     return request;
   }
 
-  private buildChunk(cx: number, cz: number): CityChunk {
+  private buildChunk(
+    cx: number,
+    cz: number,
+    buildingFootprints: NYCBuildingFootprint[] = [],
+  ): CityChunk {
     const key = this.key(cx, cz);
     const centerX = (cx + 0.5) * CITY_CHUNK_SIZE_M;
     const centerZ = (cz + 0.5) * CITY_CHUNK_SIZE_M;
@@ -821,6 +839,73 @@ export class NYCCityChunkManager {
     const buildingSpecs = this.graph instanceof NYCGISRoadGraph
       ? []
       : this.collectBuildings(minX, maxX, minZ, maxZ);
+    const gisBuildingPositions: number[] = [];
+    const gisBuildingIndices: number[] = [];
+    if (this.graph instanceof NYCGISRoadGraph) {
+      for (const building of buildingFootprints) {
+        for (const polygon of building.polygons) {
+          const outer = polygon[0];
+          if (!outer || outer.length < 4) continue;
+          const point2 = (point: { x: number; z: number }): [number, number] =>
+            [point.x - centerX, -(point.z - centerZ)];
+          const shape = new THREE.Shape();
+          const first = point2(outer[0]);
+          shape.moveTo(first[0], first[1]);
+          for (let i = 1; i < outer.length - 1; i++) {
+            const point = point2(outer[i]);
+            shape.lineTo(point[0], point[1]);
+          }
+          shape.closePath();
+
+          for (const ring of polygon.slice(1)) {
+            if (ring.length < 4) continue;
+            const hole = new THREE.Path();
+            const holeFirst = point2(ring[0]);
+            hole.moveTo(holeFirst[0], holeFirst[1]);
+            for (let i = 1; i < ring.length - 1; i++) {
+              const point = point2(ring[i]);
+              hole.lineTo(point[0], point[1]);
+            }
+            hole.closePath();
+            shape.holes.push(hole);
+          }
+
+          // HEIGHT_ROOF is authoritative where available. Missing values use
+          // a feature-code median baked into the tile, with provenance preserved.
+          // Buildings are placed on the same zero datum as current 2D CSCL roads;
+          // GROUND_ELEVATION is retained but not applied until terrain DEM is loaded.
+          const height = THREE.MathUtils.clamp(building.heightM, 2.5, 500);
+          const extrusion = new THREE.ExtrudeGeometry(shape, {
+            depth: height,
+            bevelEnabled: false,
+            steps: 1,
+            curveSegments: 1,
+          });
+          extrusion.rotateX(-Math.PI / 2);
+          const attribute = extrusion.getAttribute('position');
+          const base = gisBuildingPositions.length / 3;
+          for (let i = 0; i < attribute.count; i++) {
+            gisBuildingPositions.push(attribute.getX(i), attribute.getY(i), attribute.getZ(i));
+          }
+          const index = extrusion.getIndex();
+          if (index) {
+            for (let i = 0; i < index.count; i++) gisBuildingIndices.push(base + index.getX(i));
+          } else {
+            for (let i = 0; i < attribute.count; i++) gisBuildingIndices.push(base + i);
+          }
+          extrusion.dispose();
+        }
+      }
+    }
+    const gisBuildingGeometry = makeGeometry(gisBuildingPositions, gisBuildingIndices);
+    if (gisBuildingGeometry) {
+      geometries.push(gisBuildingGeometry);
+      const mesh = new THREE.Mesh(gisBuildingGeometry, this.buildingMaterial);
+      mesh.name = 'nyc-authoritative-building-footprints';
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
     // Neighbour footprints are indexed as well, so a prop generated at a chunk
     // edge cannot overlap a building owned by the adjacent streamed chunk.
     const nearbyBuildings = this.graph instanceof NYCGISRoadGraph
@@ -997,6 +1082,7 @@ export class NYCCityChunkManager {
     if (groundGeometry) this.addTrimeshCollider(body, groundGeometry, 0.84);
     if (roadGeometry) this.addTrimeshCollider(body, roadGeometry, 0.96);
     if (sidewalkGeometry) this.addTrimeshCollider(body, sidewalkGeometry, 0.82);
+    if (gisBuildingGeometry) this.addTrimeshCollider(body, gisBuildingGeometry, 0.84);
     // Top and soffit collision surfaces are independent. The top catches
     // traffic on the deck; the lower surface only catches an over-height
     // vehicle passing below, never a normal ground-level vehicle.
@@ -1062,7 +1148,7 @@ export class NYCCityChunkManager {
         this.physics.createCollider(descriptor, body);
       }
     }
-    let buildingColliders = 0;
+    let buildingColliders = gisBuildingGeometry ? buildingFootprints.length : 0;
     for (const b of buildingSpecs) {
       this.physics.createCollider(
         RAPIER.ColliderDesc.cuboid(b.width * 0.5, b.height * 0.5, b.depth * 0.5)
@@ -1086,7 +1172,7 @@ export class NYCCityChunkManager {
       group,
       body,
       geometries,
-      buildings: buildingSpecs.length,
+      buildings: this.graph instanceof NYCGISRoadGraph ? buildingFootprints.length : buildingSpecs.length,
       buildingColliders,
       roads: roadLines.size,
       environmentObjects: streetColliderSpecs.length,
