@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-const path = new URL('../public/data/nyc/manhattan-street-network.json', import.meta.url);
+const path = new URL('../public/data/nyc/nyc-street-network.json', import.meta.url);
 const networkBytes = await readFile(path);
 const network = JSON.parse(networkBytes.toString('utf8'));
 const manifestPath = new URL('../public/data/nyc/manifest.json', import.meta.url);
@@ -13,7 +13,12 @@ assert.equal(manifest.generatedAt, network.generatedAt);
 assert.deepEqual(manifest.bounds, network.bounds);
 assert.equal(manifest.counts.sourceFeatures, network.counts.sourceFeatures);
 assert.equal(manifest.counts.retainedFeatures, network.counts.retainedFeatures);
-assert.equal(manifest.files.streetNetwork, 'manhattan-street-network.json');
+assert.equal(manifest.files.streetNetwork, 'nyc-street-network.json');
+assert.deepEqual(
+  Object.fromEntries(network.boroughCoverage.map((entry) => [entry.borough, entry.covered])),
+  { 'Manhattan': true, 'The Bronx': true, 'Brooklyn': true, 'Queens': true, 'Staten Island': true },
+  'five-borough coverage must be measured from baked source geometry, not inferred from the query envelope',
+);
 assert.equal(manifest.files.bytes, networkBytes.byteLength,
   'manifest byte count must match the exact baked file on disk');
 assert.equal(manifest.files.sha256, createHash('sha256').update(networkBytes).digest('hex'),

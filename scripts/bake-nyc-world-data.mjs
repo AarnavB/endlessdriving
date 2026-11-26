@@ -9,7 +9,7 @@ import {
 
 const DATASET_ID = 'inkn-q76z';
 const PAGE_SIZE = 4000;
-const MAX_PAGES = 16;
+const MAX_PAGES = 64;
 const MAX_FEATURES = PAGE_SIZE * MAX_PAGES;
 const REQUEST_TIMEOUT_MS = 45000;
 
@@ -206,7 +206,7 @@ async function main() {
   if (tiles.length === 0) throw new Error('Baked CSCL network produced no runtime tiles.');
   const drivableEdgeCount = payload.graph.edges.filter((edge) =>
     Array.isArray(edge.allowedDirections) && edge.allowedDirections.length > 0).length;
-  const dataPath = resolve(outDir, 'manhattan-street-network.json');
+  const dataPath = resolve(outDir, 'nyc-street-network.json');
   const manifestPath = resolve(outDir, 'manifest.json');
   await writeFile(dataPath, data, 'utf8');
   await writeFile(manifestPath, JSON.stringify({
@@ -217,6 +217,8 @@ async function main() {
     bounds,
     counts: payload.counts,
     sourceFieldDiagnostics: payload.sourceFieldDiagnostics,
+    boroughCoverage: payload.boroughCoverage,
+    retrievedAt: payload.retrievedAt,
     graph: {
       ...payload.graph.diagnostics,
       drivableEdgeCount,
@@ -225,7 +227,7 @@ async function main() {
     spawnPosition: spawnNode.position,
     tiles,
     files: {
-      streetNetwork: 'manhattan-street-network.json',
+      streetNetwork: 'nyc-street-network.json',
       sha256: checksum,
       bytes: Buffer.byteLength(data),
       tileCount: tiles.length,

@@ -790,17 +790,23 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
 
   normalized.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
   const graph = buildCSCLRoadGraph(normalized);
+  const boroughCoverage = buildBoroughCoverage(normalized);
   return {
     schema: 'endless-driving.nyc-street-network',
     schemaVersion: 3,
     sourceFieldDiagnostics: summarizeCSCLSourceFields(features),
     graph,
     generatedAt,
+    retrievedAt: generatedAt,
+    boroughCoverage,
     source: {
       datasetId: 'inkn-q76z',
       title: 'NYC Street Centerline (CSCL)',
       provider: 'NYC Office of Technology and Innovation',
       url: 'https://data.cityofnewyork.us/City-Government/NYC-Street-Centerline-CSCL-/inkn-q76z',
+      attribution: 'NYC Office of Technology and Innovation',
+      license: 'Public NYC Open Data; attribution retained with generated assets.',
+      termsOfUse: 'https://opendata.cityofnewyork.us/overview/#terms-of-use',
       trafficDirectionSemantics: {
         FT: 'with the segment address range',
         TF: 'against the segment address range',
@@ -839,10 +845,50 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
 }
 
 export const CSCL_DEFAULT_BOUNDS = Object.freeze({
-  // Manhattan-wide operating envelope, with adjacent bridge approaches.
-  // This is not a claim of all-five-borough NYC coverage.
-  north: 40.879,
-  south: 40.699,
-  east: -73.907,
-  west: -74.020,
+  // Broad WGS84 discovery envelope around all five NYC boroughs.
+  // Official source geometry, rather than these rectangular bounds, defines land coverage.
+  north: 40.92,
+  south: 40.48,
+  east: -73.70,
+  west: -74.26,
 });
+
+const BOROUGH_COVERAGE_PROBES = Object.freeze([
+  { name: 'Manhattan', latitude: 40.7580, longitude: -73.9855 },
+  { name: 'The Bronx', latitude: 40.8249, longitude: -73.8760 },
+  { name: 'Brooklyn', latitude: 40.6782, longitude: -73.9442 },
+  { name: 'Queens', latitude: 40.7282, longitude: -73.7949 },
+  { name: 'Staten Island', latitude: 40.5795, longitude: -74.1502 },
+]);
+
+function nearestNetworkDistanceM(features, point) {
+  let nearest = Infinity;
+  for (const feature of features) {
+    for (const path of feature.paths) {
+      for (let i = 1; i < path.length; i++) {
+        const a = path[i - 1], b = path[i];
+        const dx = b.x - a.x, dz = b.z - a.z;
+        const denominator = dx * dx + dz * dz;
+        const t = denominator > 1e-9
+          ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.z - a.z) * dz) / denominator))
+          : 0;
+        nearest = Math.min(nearest, Math.hypot(point.x - a.x - dx * t, point.z - a.z - dz * t));
+      }
+    }
+  }
+  return nearest;
+}
+
+function buildBoroughCoverage(features) {
+  return BOROUGH_COVERAGE_PROBES.map((probe) => {
+    const point = geographicToLocalENU(probe.longitude, probe.latitude, 0);
+    const nearestRoadDistanceM = nearestNetworkDistanceM(features, point);
+    return {
+      borough: probe.name,
+      anchor: { latitude: probe.latitude, longitude: probe.longitude },
+      nearestRoadDistanceM: Number.isFinite(nearestRoadDistanceM)
+        ? Number(nearestRoadDistanceM.toFixed(2)) : null,
+      covered: nearestRoadDistanceM <= 2500,
+    };
+  });
+}
