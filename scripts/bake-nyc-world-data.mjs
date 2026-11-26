@@ -42,8 +42,8 @@ async function fetchPage(url, attempt = 0) {
     });
     if (!response.ok) {
       const detail = (await response.text().catch(() => '')).slice(0, 300);
-      if ((response.status === 429 || response.status >= 500) && attempt < 3) {
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 500 * (2 ** attempt)));
+      if ((response.status === 429 || response.status >= 500) && attempt < 5) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 750 * (2 ** attempt)));
         return fetchPage(url, attempt + 1);
       }
       throw new Error('NYC Open Data returned HTTP ' + response.status + ': ' + detail);
@@ -54,8 +54,8 @@ async function fetchPage(url, attempt = 0) {
     }
     return payload.features;
   } catch (error) {
-    if (attempt < 3 && (error?.name === 'TimeoutError' || error?.name === 'TypeError')) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 500 * (2 ** attempt)));
+    if (attempt < 5 && (error?.name === 'TimeoutError' || error?.name === 'TypeError')) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 750 * (2 ** attempt)));
       return fetchPage(url, attempt + 1);
     }
     throw error;
