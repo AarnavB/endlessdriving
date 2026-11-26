@@ -45,6 +45,12 @@ export interface CityRoadSegment {
   horizontalCurvature: number;
   verticalCurvature: number;
   controlPoints?: [CityVector3, CityVector3];
+  /** Complete source GIS centerline; never reduced to endpoint chords. */
+  geometry?: CityVector3[];
+  sourceFeatureId?: string;
+  sourceRoadwayType?: string;
+  fromLevelCode?: number | null;
+  toLevelCode?: number | null;
   label?: string;
 }
 export interface CityRoadEdge {
@@ -157,9 +163,18 @@ export class CityRoadGraph {
   private readonly curveTables = new Map<string, CurveSample[]>();
   private interchange!: CityInterchangeDescriptor;
 
-  constructor(readonly seed: number) {
+  constructor(readonly seed: number, buildProceduralInterchange = true) {
     if (!Number.isFinite(seed)) throw new RangeError("City graph seed must be finite.");
-    this.buildRepresentativeInterchange();
+    this.interchange = {
+      groundEntryNodeId: "",
+      groundExitNodeId: "",
+      deckCrossingNodeId: "",
+      entryRampSegmentIds: [],
+      exitRampSegmentIds: [],
+      highwaySegmentIds: [],
+      underpassSegmentIds: [],
+    };
+    if (buildProceduralInterchange) this.buildRepresentativeInterchange();
   }
 
   /**
