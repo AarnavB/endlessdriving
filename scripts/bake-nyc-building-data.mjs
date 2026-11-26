@@ -6,7 +6,8 @@ import { geographicToLocalENU, CSCL_DEFAULT_BOUNDS } from './nyc-street-data-cor
 
 const DATASET_ID = '5zhs-2jue';
 const PAGE_SIZE = 4000;
-const MAX_PAGES = 32;
+const MAX_PAGES = 320;
+const PAGE_CONCURRENCY = 3;
 const TILE_SIZE_M = 512;
 const FEET_TO_METRES = 0.3048;
 const FALLBACK_HEIGHT_M = 8;
@@ -49,20 +50,33 @@ async function fetchPage(url, attempt = 0) {
     throw error;
   }
 }
+async function downloadBuildingPage(bounds, page) {
+  const url = new URL('https://data.cityofnewyork.us/resource/' + DATASET_ID + '.geojson');
+  url.searchParams.set('$select', 'the_geom,objectid,doitt_id,bin,base_bbl,feature_code,geom_source,ground_elevation,height_roof,construction_year,name,last_status_type');
+  url.searchParams.set('$where', 'within_box(the_geom,' + bounds.north + ',' + bounds.west + ',' + bounds.south + ',' + bounds.east + ')');
+  url.searchParams.set('$order', 'objectid');
+  url.searchParams.set('$limit', String(PAGE_SIZE));
+  url.searchParams.set('$offset', String(page * PAGE_SIZE));
+  return fetchPage(url);
+}
+
 async function downloadBuildings(bounds) {
   const features = [];
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const url = new URL('https://data.cityofnewyork.us/resource/' + DATASET_ID + '.geojson');
-    url.searchParams.set('$select', 'the_geom,objectid,doitt_id,bin,base_bbl,feature_code,geom_source,ground_elevation,height_roof,construction_year,name,last_status_type');
-    url.searchParams.set('$where', 'within_box(the_geom,' + bounds.north + ',' + bounds.west + ',' + bounds.south + ',' + bounds.east + ')');
-    url.searchParams.set('$order', 'objectid');
-    url.searchParams.set('$limit', String(PAGE_SIZE));
-    url.searchParams.set('$offset', String(page * PAGE_SIZE));
-    const result = await fetchPage(url);
-    features.push(...result);
-    process.stdout.write('Downloaded NYC building page ' + (page + 1) + ': '
-      + result.length + ' rows (' + features.length + ' total)\n');
-    if (result.length < PAGE_SIZE) return features;
+  for (let firstPage = 0; firstPage < MAX_PAGES; firstPage += PAGE_CONCURRENCY) {
+    const pages = Array.from(
+      { length: Math.min(PAGE_CONCURRENCY, MAX_PAGES - firstPage) },
+      (_, index) => firstPage + index,
+    );
+    // Bounded concurrency shortens the full-city bake without overwhelming the public API.
+    const results = await Promise.all(pages.map((page) => downloadBuildingPage(bounds, page)));
+    for (let index = 0; index < results.length; index++) {
+      const page = pages[index];
+      const result = results[index];
+      features.push(...result);
+      process.stdout.write('Downloaded NYC building page ' + (page + 1) + ': '
+        + result.length + ' rows (' + features.length + ' total)\n');
+      if (result.length < PAGE_SIZE) return features;
+    }
   }
   throw new Error('NYC BUILDING query exceeded the configured page count; refusing a truncated footprint bake.');
 }
@@ -133,6 +147,17 @@ function normalizeFeature(feature) {
     centroid,
     polygons,
   };
+}
+
+function boroughFromBin(value) {
+  const prefix = String(value ?? '').trim().slice(0, 1);
+  return ({
+    '1': 'Manhattan',
+    '2': 'The Bronx',
+    '3': 'Brooklyn',
+    '4': 'Queens',
+    '5': 'Staten Island',
+  })[prefix] ?? 'Unknown';
 }
 
 function median(values) {
@@ -218,20 +243,34 @@ async function main() {
   const tiles = await writeTiles(outDir, buildings);
   const sourceHeightCount = buildings.filter((item) => item.heightSource === 'height_roof').length;
   const inferredHeightCount = buildings.length - sourceHeightCount;
+  const retrievedAt = new Date().toISOString();
+  const boroughCounts = {
+    'Manhattan': 0, 'The Bronx': 0, 'Brooklyn': 0, 'Queens': 0,
+    'Staten Island': 0, 'Unknown': 0,
+  };
+  for (const building of buildings) boroughCounts[boroughFromBin(building.bin)]++;
   const manifest = {
     schema: 'endless-driving.nyc-building-network',
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
+    retrievedAt,
     tileSizeM: TILE_SIZE_M,
     source: {
       datasetId: DATASET_ID,
       title: 'NYC BUILDING',
       provider: 'NYC Office of Technology and Innovation',
+      attribution: 'NYC Office of Technology and Innovation',
       url: 'https://data.cityofnewyork.us/City-Government/BUILDING/5zhs-2jue',
+      license: 'Public NYC Open Data; attribution retained with generated assets.',
+      termsOfUse: 'https://opendata.cityofnewyork.us/overview/#terms-of-use',
+      sourceHorizontalCrs: 'WGS 84 longitude/latitude (EPSG:4326)',
+      runtimeCoordinateFrame: 'local ENU metres (+X east, +Y up, +Z north)',
       heightUnit: 'feet',
       groundElevationUnit: 'feet',
+      groundElevationVerticalDatum: 'Not asserted by the selected BUILDING attributes; retained pending validated NAVD88 DEM integration.',
     },
     bounds,
+    coverage: { boroughCounts },
     counts: {
       sourceFeatures: raw.length,
       retainedBuildings: buildings.length,

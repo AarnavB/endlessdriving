@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build-and-regressions:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Check out feature branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -41,7 +41,7 @@ jobs:
         with:
           name: nyc-gis-world-${{ github.sha }}
           path: |
-            public/data/nyc/manhattan-street-network.json
+            public/data/nyc/nyc-street-network.json
             public/data/nyc/manifest.json
             public/data/nyc/tiles/
             public/data/nyc/buildings/

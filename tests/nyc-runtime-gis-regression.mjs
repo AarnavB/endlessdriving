@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 const root = resolve('public/data/nyc');
 const manifestBytes = await readFile(resolve(root, 'manifest.json'));
 const manifest = JSON.parse(manifestBytes.toString('utf8'));
-const networkBytes = await readFile(resolve(root, 'manhattan-street-network.json'));
+const networkBytes = await readFile(resolve(root, 'nyc-street-network.json'));
 const network = JSON.parse(networkBytes.toString('utf8'));
 
 assert.equal(manifest.schema, network.schema);
@@ -17,6 +17,11 @@ assert.equal(manifest.files.sha256, createHash('sha256').update(networkBytes).di
 assert.ok(manifest.tiles.length > 0);
 assert.ok(manifest.tileSizeM > 0);
 assert.ok(manifest.graph.drivableEdgeCount > 0);
+assert.deepEqual(
+  Object.fromEntries(manifest.boroughCoverage.map((entry) => [entry.borough, entry.covered])),
+  { 'Manhattan': true, 'The Bronx': true, 'Brooklyn': true, 'Queens': true, 'Staten Island': true },
+  'the baked street network must actually reach every borough coverage probe',
+);
 assert.ok(Number.isFinite(manifest.spawnPosition.x) && Number.isFinite(manifest.spawnPosition.z));
 
 
@@ -24,7 +29,14 @@ const buildingRoot = resolve(root, 'buildings');
 const buildingManifestBytes = await readFile(resolve(buildingRoot, 'manifest.json'));
 const buildingManifest = JSON.parse(buildingManifestBytes.toString('utf8'));
 assert.equal(buildingManifest.schema, 'endless-driving.nyc-building-network');
-assert.equal(buildingManifest.schemaVersion, 1);
+assert.equal(buildingManifest.schemaVersion, 2);
+assert.ok(buildingManifest.retrievedAt);
+assert.equal(buildingManifest.source.sourceHorizontalCrs, 'WGS 84 longitude/latitude (EPSG:4326)');
+assert.equal(buildingManifest.source.runtimeCoordinateFrame, 'local ENU metres (+X east, +Y up, +Z north)');
+for (const borough of ['Manhattan', 'The Bronx', 'Brooklyn', 'Queens', 'Staten Island']) {
+  assert.ok(buildingManifest.coverage.boroughCounts[borough] > 0,
+    'real building footprint records must exist in ' + borough);
+}
 assert.equal(buildingManifest.source.datasetId, '5zhs-2jue');
 assert.deepEqual(buildingManifest.bounds, manifest.bounds);
 assert.ok(buildingManifest.counts.retainedBuildings > 0);
@@ -234,5 +246,7 @@ console.log(JSON.stringify({
   retainedBuildings:uniqueBuildings.size,
   buildingTileCount:buildingManifest.tiles.length,
   buildingTileRows,
+  boroughRoadCoverage: manifest.boroughCoverage,
+  boroughBuildingCoverage: buildingManifest.coverage.boroughCounts,
   distAssets:'roads-and-buildings-verified',
 }));

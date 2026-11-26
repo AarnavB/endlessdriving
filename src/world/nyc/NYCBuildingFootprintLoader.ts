@@ -30,10 +30,17 @@ export interface NYCBuildingTile {
 }
 export interface NYCBuildingManifest {
   schema: 'endless-driving.nyc-building-network';
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAt: string;
+  retrievedAt: string;
   tileSizeM: number;
-  source: { datasetId: string; title: string; provider: string; url: string; heightUnit: string; groundElevationUnit: string };
+  source: {
+    datasetId: string; title: string; provider: string; attribution: string;
+    url: string; license: string; termsOfUse: string; sourceHorizontalCrs: string;
+    runtimeCoordinateFrame: string; heightUnit: string; groundElevationUnit: string;
+    groundElevationVerticalDatum: string;
+  };
+  coverage: { boroughCounts: Record<string, number> };
   bounds: { north: number; south: number; east: number; west: number };
   counts: {
     sourceFeatures: number; retainedBuildings: number; sourceHeightCount: number;
@@ -101,7 +108,7 @@ export class NYCBuildingFootprintLoader {
     const response = await this.fetchWithRetry(this.baseUrl + 'manifest.json');
     const manifest = await response.json() as NYCBuildingManifest;
     if (!manifest || manifest.schema !== 'endless-driving.nyc-building-network'
-      || manifest.schemaVersion !== 1 || !Array.isArray(manifest.tiles)
+      || manifest.schemaVersion !== 2 || !Array.isArray(manifest.tiles)
       || manifest.tiles.length === 0 || manifest.source?.datasetId !== '5zhs-2jue'
       || !Number.isFinite(manifest.tileSizeM) || manifest.tileSizeM <= 0) {
       throw new Error('NYC building manifest failed schema/source validation.');
