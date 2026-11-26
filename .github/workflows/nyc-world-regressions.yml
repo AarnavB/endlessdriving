@@ -30,11 +30,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: TypeScript and production build
-        id: build
-        run: npm run build
-        continue-on-error: true
-
       - name: Bake live NYC CSCL street network
         id: nyc_bake
         run: npm run bake:nyc:roads
@@ -48,8 +43,15 @@ jobs:
           path: |
             public/data/nyc/manhattan-street-network.json
             public/data/nyc/manifest.json
+            public/data/nyc/tiles/
           retention-days: 14
           if-no-files-found: error
+      - name: TypeScript and production build
+        id: build
+        if: always() && steps.nyc_bake.outcome == 'success'
+        run: npm run build:app
+        continue-on-error: true
+
       - name: Validate baked NYC CSCL directed road graph
         id: nyc_graph
         if: always() && steps.nyc_bake.outcome == 'success'
@@ -112,5 +114,6 @@ jobs:
           test "$CITY_ROUTING_RESULT" = success
           test "$WORLD_RESULT" = success
           printf 'test:nyc-road-graph: %s\\n' "$NYC_GRAPH_RESULT"
+          test "$BUILD_RESULT" = success
           test "$NYC_BAKE_RESULT" = success
           test "$NYC_GRAPH_RESULT" = success

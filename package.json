@@ -4,17 +4,19 @@
   "version": "0.1.1",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "tsc --noEmit && vite build",
+    "dev": "npm run bake:nyc:roads && vite --host 0.0.0.0",
+    "build": "npm run bake:nyc:roads && npm run build:app",
     "preview": "vite preview --host 0.0.0.0",
     "test:drivetrain": "node tests/drivetrain-regression.mjs",
     "test:nyc-geo": "node tests/nyc-geo-regression.mjs",
-    "test:world": "npm run test:nyc-geo && npm run test:city-urban && npm run test:city-routing && npm run test:nyc-road-data",
+    "test:world": "npm run test:nyc-geo && npm run test:city-urban && npm run test:city-routing && npm run test:nyc-road-data && npm run test:nyc-runtime",
     "test:city-routing": "node tests/city-routing-regression.mjs",
     "test:city-urban": "node tests/city-urban-regression.mjs",
     "bake:nyc:roads": "node scripts/bake-nyc-world-data.mjs",
     "test:nyc-road-data": "node tests/nyc-road-data-bake-regression.mjs",
-    "test:nyc-road-graph": "node tests/nyc-road-graph-bake-regression.mjs"
+    "test:nyc-road-graph": "node tests/nyc-road-graph-bake-regression.mjs",
+    "build:app": "tsc --noEmit && vite build",
+    "test:nyc-runtime": "node tests/nyc-runtime-gis-regression.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

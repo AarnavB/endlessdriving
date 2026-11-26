@@ -111,8 +111,8 @@ export class NYCStreetNetworkLoader {
   private async fetchManifest(): Promise<NYCStreetManifest> {
     const response = await this.fetchWithRetry(this.baseUrl + 'manifest.json');
     const manifest = await response.json() as NYCStreetManifest;
-    if (!manifest || manifest.schema !== 'endless-driving.nyc-street-network.tiles'
-      || manifest.schemaVersion !== 1 || !Array.isArray(manifest.tiles)
+    if (!manifest || manifest.schema !== 'endless-driving.nyc-street-network'
+      || manifest.schemaVersion !== 3 || !Array.isArray(manifest.tiles)
       || !Number.isFinite(manifest.tileSizeM) || manifest.tileSizeM <= 0
       || !manifest.graph || manifest.graph.drivableEdgeCount <= 0 || manifest.tiles.length === 0) {
       throw new Error('NYC GIS tile manifest failed schema or graph validation.');

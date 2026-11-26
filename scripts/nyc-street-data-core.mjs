@@ -839,10 +839,10 @@ export function buildBakedStreetNetwork(features, bounds, generatedAt = new Date
 }
 
 export const CSCL_DEFAULT_BOUNDS = Object.freeze({
-  // Lower Manhattan through central / upper Manhattan, the Hudson edge and
-  // the East River. The exact polygon will be clipped against source geometry.
-  north: 40.835,
-  south: 40.694,
-  east: -73.927,
-  west: -74.055,
+  // Manhattan-wide operating envelope, with adjacent bridge approaches.
+  // This is not a claim of all-five-borough NYC coverage.
+  north: 40.879,
+  south: 40.699,
+  east: -73.907,
+  west: -74.020,
 });

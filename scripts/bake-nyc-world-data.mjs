@@ -89,6 +89,90 @@ async function downloadCSCL(bounds) {
   throw new Error('CSCL query exceeded the configured page count; refusing a truncated bake.');
 }
 
+
+function buildSpatialTiles(payload, tileSizeM = 512) {
+  const features = new Map(payload.features.map((feature) => [String(feature.id), feature]));
+  const nodes = new Map(payload.graph.nodes.map((node) => [node.id, node]));
+  const tiles = new Map();
+
+  for (const edge of payload.graph.edges) {
+    // Unknown traffic direction is retained in the audit graph but must never
+    // become a runtime-drivable edge.
+    if (!Array.isArray(edge.allowedDirections) || edge.allowedDirections.length === 0) continue;
+    const feature = features.get(String(edge.geometryRef?.featureId ?? edge.sourceFeatureId));
+    const path = feature?.paths?.[edge.geometryRef?.pathIndex ?? 0];
+    if (!Array.isArray(path) || path.length < 2) {
+      throw new Error('No preserved source polyline exists for CSCL edge ' + edge.id);
+    }
+    const minX = Math.min(...path.map((point) => point.x));
+    const maxX = Math.max(...path.map((point) => point.x));
+    const minZ = Math.min(...path.map((point) => point.z));
+    const maxZ = Math.max(...path.map((point) => point.z));
+    const firstX = Math.floor(minX / tileSizeM);
+    const lastX = Math.floor(maxX / tileSizeM);
+    const firstZ = Math.floor(minZ / tileSizeM);
+    const lastZ = Math.floor(maxZ / tileSizeM);
+    const tileEdge = {
+      ...edge,
+      geometry: path.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    };
+
+    for (let x = firstX; x <= lastX; x++) {
+      for (let z = firstZ; z <= lastZ; z++) {
+        const id = x + ':' + z;
+        let tile = tiles.get(id);
+        if (!tile) {
+          tile = { id, x, z, nodes: new Map(), edges: new Map() };
+          tiles.set(id, tile);
+        }
+        tile.edges.set(edge.id, tileEdge);
+        for (const nodeId of [edge.fromNodeId, edge.toNodeId]) {
+          const node = nodes.get(nodeId);
+          if (!node) throw new Error('Missing graph endpoint ' + nodeId + ' for edge ' + edge.id);
+          tile.nodes.set(nodeId, node);
+        }
+      }
+    }
+  }
+  return [...tiles.values()].sort((a, b) => a.z - b.z || a.x - b.x);
+}
+
+async function writeSpatialTiles(outDir, payload, tileSizeM = 512) {
+  const tilesDir = resolve(outDir, 'tiles');
+  await mkdir(tilesDir, { recursive: true });
+  const tiles = buildSpatialTiles(payload, tileSizeM);
+  const records = [];
+  for (const tile of tiles) {
+    const bounds = {
+      minX: tile.x * tileSizeM,
+      maxX: (tile.x + 1) * tileSizeM,
+      minZ: tile.z * tileSizeM,
+      maxZ: (tile.z + 1) * tileSizeM,
+    };
+    const content = JSON.stringify({
+      schema: 'endless-driving.nyc-street-tile',
+      schemaVersion: 1,
+      id: tile.id,
+      bounds,
+      graph: {
+        nodes: [...tile.nodes.values()],
+        edges: [...tile.edges.values()],
+      },
+    }) + '\n';
+    const bytes = Buffer.byteLength(content);
+    const checksum = createHash('sha256').update(content).digest('hex');
+    const path = 'tiles/' + tile.x + '_' + tile.z + '.json';
+    await writeFile(resolve(outDir, path), content, 'utf8');
+    records.push({
+      id: tile.id, path, bounds,
+      sha256: checksum, bytes,
+      edgeCount: tile.edges.size,
+      nodeCount: tile.nodes.size,
+    });
+  }
+  return records;
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const bounds = {
@@ -112,6 +196,16 @@ async function main() {
   }
   const outDir = resolve(options.outDir);
   await mkdir(outDir, { recursive: true });
+  const tileSizeM = 512;
+  const spawnNode = payload.graph.nodes
+    .filter((node) => node.outgoingEdgeIds.length > 0 || node.incomingEdgeIds.length > 0)
+    .sort((a, b) => Math.hypot(a.position.x, a.position.z) - Math.hypot(b.position.x, b.position.z)
+      || a.id.localeCompare(b.id))[0];
+  if (!spawnNode) throw new Error('Baked CSCL network has no node with a legal directed edge.');
+  const tiles = await writeSpatialTiles(outDir, payload, tileSizeM);
+  if (tiles.length === 0) throw new Error('Baked CSCL network produced no runtime tiles.');
+  const drivableEdgeCount = payload.graph.edges.filter((edge) =>
+    Array.isArray(edge.allowedDirections) && edge.allowedDirections.length > 0).length;
   const dataPath = resolve(outDir, 'manhattan-street-network.json');
   const manifestPath = resolve(outDir, 'manifest.json');
   await writeFile(dataPath, data, 'utf8');
@@ -123,11 +217,19 @@ async function main() {
     bounds,
     counts: payload.counts,
     sourceFieldDiagnostics: payload.sourceFieldDiagnostics,
-    graph: payload.graph.diagnostics,
+    graph: {
+      ...payload.graph.diagnostics,
+      drivableEdgeCount,
+    },
+    tileSizeM,
+    spawnPosition: spawnNode.position,
+    tiles,
     files: {
       streetNetwork: 'manhattan-street-network.json',
       sha256: checksum,
       bytes: Buffer.byteLength(data),
+      tileCount: tiles.length,
+      tileBytes: tiles.reduce((total, tile) => total + tile.bytes, 0),
     },
   }, null, 2) + '\n', 'utf8');
 
@@ -135,6 +237,9 @@ async function main() {
     result: 'PASS',
     output: dataPath,
     manifest: manifestPath,
+    tileCount: tiles.length,
+    tileBytes: tiles.reduce((total, tile) => total + tile.bytes, 0),
+    spawnPosition: spawnNode.position,
     sha256: checksum,
     counts: payload.counts,
     sourceFieldDiagnostics: payload.sourceFieldDiagnostics,
