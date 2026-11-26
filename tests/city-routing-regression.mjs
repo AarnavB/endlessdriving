@@ -39,10 +39,14 @@ const urbanTemp = resolve(root, 'src/world/nyc/.CityUrbanModel.regression.mjs');
 const managerTemp = resolve(root, 'src/world/nyc/.NYCCityChunkManager.regression.mjs');
 const waterfrontLayoutTemp = resolve(root, 'src/world/nyc/.NYCWaterfrontLayout.regression.mjs');
 const trafficTemp = resolve(root, 'src/game/.TrafficSystem.regression.mjs');
+const gisGraphTemp = resolve(root, 'src/world/nyc/.NYCGISRoadGraph.regression.mjs');
+const streetLoaderTemp = resolve(root, 'src/world/nyc/.NYCStreetNetworkLoader.regression.mjs');
 let physics;
 let manager;
 let traffic;
 try {
+  await writeFile(gisGraphTemp, 'export class NYCGISRoadGraph {}', 'utf8');
+  await writeFile(streetLoaderTemp, 'export class NYCStreetNetworkLoader {}', 'utf8');
   await transpile(waterfrontLayoutPath, waterfrontLayoutTemp);
   await transpile(graphPath, graphTemp, [
     ['from "./NYCWaterfrontLayout"', 'from "./.NYCWaterfrontLayout.regression.mjs"'],
@@ -52,9 +56,12 @@ try {
     ["from './CityRoadGraph'", "from './.CityRoadGraph.regression.mjs'"],
     ["from './NYCWaterfrontLayout'", "from './.NYCWaterfrontLayout.regression.mjs'"],
     ["from './CityUrbanModel'", "from './.CityUrbanModel.regression.mjs'"],
+    ["from './NYCGISRoadGraph'", "from './.NYCGISRoadGraph.regression.mjs'"],
+    ["from './NYCStreetNetworkLoader'", "from './.NYCStreetNetworkLoader.regression.mjs'"],
   ]);
   await transpile(trafficPath, trafficTemp, [
     ["from '../world/nyc/CityRoadGraph'", "from '../world/nyc/.CityRoadGraph.regression.mjs'"],
+    ["from '../world/nyc/NYCGISRoadGraph'", "from '../world/nyc/.NYCGISRoadGraph.regression.mjs'"],
   ]);
 
   const city = await import(pathToFileURL(graphTemp).href);
@@ -333,9 +340,9 @@ try {
   const managerSource = await readFile(managerPath, 'utf8');
   const vehicleSource = await readFile(resolve(root, 'src/vehicles/VehicleController.ts'), 'utf8');
   assert(!/RoadPath|RoadChunkManager/.test(gameSource), 'Game.ts no longer depends on the scalar highway system');
-  assert(/new CityRoadGraph/.test(gameSource), 'Game owns the deterministic city road graph');
-  assert(/new NYCCityChunkManager\(this\.scene, this\.physics, this\.roadGraph\)/.test(gameSource),
-    'game initialization streams world geometry from the graph');
+  assert(/new NYCGISRoadGraph/.test(gameSource), 'Game constructs the authoritative GIS graph');
+  assert(/new NYCCityChunkManager\(this\.scene, this\.physics, this\.roadGraph, this\.streetLoader\)/.test(gameSource),
+    'game initialization streams GIS world geometry from the validated tile loader');
   assert(/new TrafficSystem\(this\.physics, this\.scene, this\.roadGraph, spawnPosition\)/.test(gameSource),
     'traffic uses the same authoritative graph');
   assert(/CityTrafficController/.test(trafficSource) && /getLanePose/.test(trafficSource),
@@ -575,7 +582,7 @@ try {
   assert(oppositeSideBarrierNearExit,
     'the opposite deck barrier remains in place for protection near the merge');
 
-  const terrainChunk = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
+  const terrainChunk = scene.children.find((object) => object.name.startsWith('nyc-gis-world-chunk-'));
   const terrainMesh = terrainChunk?.getObjectByName('terrain-heightfield');
   assert(terrainMesh instanceof THREE.Mesh, 'streamed city chunk includes its terrain heightfield mesh');
   assert(terrainMesh.geometry.getAttribute('color')?.count > 1000,
@@ -665,7 +672,7 @@ try {
   );
   assert(underDeckHit && underDeckHit.timeOfImpact > 3.5 && underDeckHit.timeOfImpact < 4.5,
     'a ground-level ray beneath the deck reaches the street without hitting the soffit');
-  const spawnChunk = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
+  const spawnChunk = scene.children.find((object) => object.name.startsWith('nyc-gis-world-chunk-'));
   assert(spawnChunk?.getObjectByName('street-level-retail-glazing'),
     'spawn chunk creates visible instanced ground-floor storefront glazing');
   assert(spawnChunk?.getObjectByName('street-level-retail-sign-bands'),
@@ -706,7 +713,7 @@ try {
   assert(Math.abs(playerBody.translation().y - initialY) < 0.8,
     'headless Rapier player body remains supported by generated street collision geometry');
 
-  const chunkGroup = scene.children.find((object) => object.name.startsWith('fictional-city-chunk-'));
+  const chunkGroup = scene.children.find((object) => object.name.startsWith('nyc-gis-world-chunk-'));
   assert(chunkGroup, 'streamed geometry is present in the Three.js scene');
   const beforeRebaseX = chunkGroup.position.x;
   const signalGroup = scene.children.find((object) => object.name.startsWith('traffic-signals-'));
@@ -733,7 +740,7 @@ try {
   manager.dispose();
   assert.equal(manager.getDiagnostics().activeChunks, 0, 'world disposal clears active chunks');
   assert.equal(traffic.getDiagnostics().activeVehicles, 0, 'traffic disposal clears pooled vehicles');
-  assert.equal(scene.children.filter((object) => object.name.startsWith('fictional-city-chunk-')).length, 0,
+  assert.equal(scene.children.filter((object) => object.name.startsWith('nyc-gis-world-chunk-')).length, 0,
     'world disposal removes streamed scene objects');
   assert.equal(scene.children.filter((object) => object.name.startsWith('traffic-signals-')).length, 0,
     'traffic disposal removes signal meshes and their scene objects');
@@ -766,5 +773,7 @@ try {
     rm(managerTemp, { force: true }),
     rm(trafficTemp, { force: true }),
     rm(waterfrontLayoutTemp, { force: true }),
+    rm(gisGraphTemp, { force: true }),
+    rm(streetLoaderTemp, { force: true }),
   ]);
 }
