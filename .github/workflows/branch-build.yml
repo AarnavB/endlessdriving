@@ -27,8 +27,10 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Type-check and build
-        run: npm run build
+      - name: Type-check and build app
+        # The dedicated NYC workflow performs the external GIS bake. Avoid
+        # downloading the same datasets in parallel from this general workflow.
+        run: npm run build:app
 
       - name: Run Rapier drivetrain regression simulation
         run: npm run test:drivetrain
