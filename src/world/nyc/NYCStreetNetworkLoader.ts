@@ -51,6 +51,7 @@ export class NYCStreetNetworkLoader {
   private manifestPromise: Promise<NYCStreetManifest> | null = null;
   private readonly cache = new Map<string, NYCStreetTile>();
   private readonly pending = new Map<string, Promise<NYCStreetTile>>();
+  private readonly abortController = new AbortController();
   private disposed = false;
   private readonly baseUrl: string;
 
@@ -96,12 +97,18 @@ export class NYCStreetNetworkLoader {
       throw new RangeError('Invalid GIS tile bounds request.');
     }
     const manifest = await this.loadManifest();
+    this.assertActive();
     return Promise.all(manifest.tiles.filter((tile) => intersects(tile.bounds,bounds))
       .map((tile) => this.loadTile(tile)));
   }
 
   dispose(): void {
-    this.disposed = true; this.cache.clear(); this.pending.clear(); this.manifestPromise = null;
+    if (this.disposed) return;
+    this.disposed = true;
+    this.abortController.abort();
+    this.cache.clear();
+    this.pending.clear();
+    this.manifestPromise = null;
   }
 
   private assertActive(): void {
@@ -110,7 +117,9 @@ export class NYCStreetNetworkLoader {
 
   private async fetchManifest(): Promise<NYCStreetManifest> {
     const response = await this.fetchWithRetry(this.baseUrl + 'manifest.json');
+    this.assertActive();
     const manifest = await response.json() as NYCStreetManifest;
+    this.assertActive();
     if (!manifest || manifest.schema !== 'endless-driving.nyc-street-network'
       || manifest.schemaVersion !== 3 || !Array.isArray(manifest.tiles)
       || !Number.isFinite(manifest.tileSizeM) || manifest.tileSizeM <= 0
@@ -132,16 +141,20 @@ export class NYCStreetNetworkLoader {
   }
 
   private async loadTile(record: NYCStreetTileRecord): Promise<NYCStreetTile> {
+    this.assertActive();
     const existing = this.cache.get(record.id);
     if (existing) { this.cache.delete(record.id); this.cache.set(record.id,existing); return existing; }
     const pending = this.pending.get(record.id);
     if (pending) return pending;
     const request = (async () => {
       const response = await this.fetchWithRetry(this.baseUrl + record.path);
+      this.assertActive();
       const bytes = await response.arrayBuffer();
+      this.assertActive();
       if (bytes.byteLength !== record.bytes) throw new Error('GIS tile byte count mismatch: ' + record.id);
       if (!globalThis.crypto?.subtle) throw new Error('Web Crypto is required for GIS tile checksum validation.');
       const digest = await globalThis.crypto.subtle.digest('SHA-256',bytes);
+      this.assertActive();
       if (toHex(digest) !== record.sha256.toLowerCase()) throw new Error('GIS tile SHA-256 mismatch: ' + record.id);
       const tile = JSON.parse(new TextDecoder().decode(bytes)) as NYCStreetTile;
       if (tile.schema !== 'endless-driving.nyc-street-tile' || tile.schemaVersion !== 1
@@ -150,6 +163,9 @@ export class NYCStreetNetworkLoader {
         || tile.graph.edges.length !== record.edgeCount) {
         throw new Error('GIS tile schema/count validation failed: ' + record.id);
       }
+      // The request may have outlived dispose() even if a fetch implementation
+      // ignores AbortSignal. Never allow an obsolete response to repopulate LRU.
+      this.assertActive();
       this.cache.set(record.id,tile);
       while (this.cache.size > Math.max(1,this.maxCachedTiles)) {
         const oldest = this.cache.keys().next().value as string | undefined;
@@ -165,11 +181,17 @@ export class NYCStreetNetworkLoader {
   private async fetchWithRetry(url: string): Promise<Response> {
     let lastError: unknown = null;
     for (let attempt=0; attempt<3; attempt++) {
+      this.assertActive();
       try {
-        const response = await fetch(url,{cache:'no-cache'});
+        const response = await fetch(url,{
+          cache:'no-cache', signal:this.abortController.signal,
+        });
+        this.assertActive();
         if (!response.ok) throw new Error('HTTP '+response.status+' for '+url);
         return response;
       } catch (error) {
+        // Disposal is terminal for this loader. Do not retry an aborted request.
+        this.assertActive();
         lastError=error;
         if (attempt<2) await new Promise((resolve) => setTimeout(resolve,250*(attempt+1)));
       }
