@@ -249,15 +249,29 @@ export class NYCGISRoadGraph extends CityRoadGraph {
   override getInterchangeDescriptor(){return {groundEntryNodeId:'',groundExitNodeId:'',deckCrossingNodeId:'',entryRampSegmentIds:[],exitRampSegmentIds:[],highwaySegmentIds:[],underpassSegmentIds:[]};}
 
   private addNode(source:NYCStreetTileNode):void {
-    const p={...source.position};if(!source.id||![p.x,p.y,p.z].every(Number.isFinite))throw new Error('Invalid CSCL tile node.');
-    const old=this.gisNodes.get(source.id);if(old){if(Math.hypot(old.position.x-p.x,old.position.y-p.y,old.position.z-p.z)>0.02)throw new Error('Conflicting duplicate node '+source.id);return;}
-    const code=Number.isInteger(source.levelCode)?source.levelCode:null,levelCode=code===null||code===99?13:code;
+    const p={...source.position};
+    if(!source.id||![p.x,p.y,p.z].every(Number.isFinite)) {
+      throw new Error('Invalid CSCL tile node.');
+    }
+    const code=Number.isInteger(source.levelCode)?source.levelCode:null;
+    const levelCode=code===null||code===99?13:code;
+    // Canonicalize source 2D ground nodes to the same DEM-derived elevation
+    // before comparing duplicates. A node repeated in another tile still has
+    // its original source y=0; comparing that against an already DEM-lifted
+    // resident node falsely reports a conflict for every shared endpoint.
     if(levelCode===13&&this.terrainHeightAt) {
       const height=this.terrainHeightAt(p.x,p.z);
       if(height===null||!Number.isFinite(height)) {
         throw new Error('NYC DEM has no validated elevation for at-grade CSCL node '+source.id+'.');
       }
       p.y=height;
+    }
+    const old=this.gisNodes.get(source.id);
+    if(old) {
+      if(Math.hypot(old.position.x-p.x,old.position.y-p.y,old.position.z-p.z)>0.02) {
+        throw new Error('Conflicting duplicate node '+source.id);
+      }
+      return;
     }
     const kind:CityRoadLevelKind=levelCode<13?'underpass':levelCode>13?'elevated':'ground';
     const node:CityIntersection={id:source.id,gridX:Math.round(p.x/160),gridZ:Math.round(p.z/160),position:{...p},elevationM:p.y,level:levelCode-13,kind,intersectionType:kind==='ground'?'at-grade':'grade-separated',signalControlled:kind==='ground'&&source.degree>=3,signalOffsetSeconds:hash(source.id)%5600/100};
