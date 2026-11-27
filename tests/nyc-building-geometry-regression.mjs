@@ -4,9 +4,9 @@ import {
   calculateFootprintBounds,
   clipTriangleToBounds,
   liftBuildingVertexToTerrain,
-  sampleTriangulatedTerrainSurface,
   unionFootprintBounds,
 } from '../src/world/nyc/nyc-building-geometry-core.mjs';
+import { sampleTriangulatedTerrainSurface } from '../src/world/nyc/nyc-road-surface-core.mjs';
 
 const polygons=[[ [{x:-20,z:-10},{x:540,z:-10},{x:540,z:20},{x:-20,z:20},{x:-20,z:-10}] ]];
 const footprint=calculateFootprintBounds(polygons);

@@ -745,7 +745,7 @@ export class NYCCityChunkManager {
             const offset = (segment.profile.lanesPerDirection * 0.5 - lane)
               * segment.profile.laneWidthM;
             this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
-              whitePositions, whiteIndices, 0.105, 0.065, offset);
+              whitePositions, whiteIndices, 0.105, 0.065, offset, terrainSurfaceSampler);
           }
         }
         if (elevated) this.collectBridgeDetails(segment, chunkBounds, barrierSpecs, pierSpecs, capSpecs);
