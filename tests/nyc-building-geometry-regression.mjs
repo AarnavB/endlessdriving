@@ -4,6 +4,7 @@ import {
   calculateFootprintBounds,
   clipTriangleToBounds,
   liftBuildingVertexToTerrain,
+  sampleTriangulatedTerrainSurface,
   unionFootprintBounds,
 } from '../src/world/nyc/nyc-building-geometry-core.mjs';
 
@@ -42,4 +43,17 @@ assert.throws(
  () => liftBuildingVertexToTerrain({x:10,y:0,z:20},()=>Number.NaN),
  /No validated DEM elevation/,
  'non-finite terrain never becomes a building base');
+
+const nonCoplanarGrid = new Map([
+  ['0:0',0], ['1:0',10], ['1:1',20], ['0:1',30],
+]);
+const terrainMeshSample = (x,z) =>
+  sampleTriangulatedTerrainSurface(x,z,10,(gx,gz)=>nonCoplanarGrid.get(gx+':'+gz));
+assert.deepEqual(liftBuildingVertexToTerrain({x:7,y:0,z:3},terrainMeshSample),
+  {x:7,y:10,z:3},
+  'building bases must sample the same triangulated surface as the visible terrain mesh');
+assert.deepEqual(liftBuildingVertexToTerrain({x:3,y:12,z:7},terrainMeshSample),
+  {x:3,y:30,z:7},
+  'building roof height remains above its mesh-aligned base elevation');
+
 console.log(JSON.stringify({suite:'NYC building footprint bounds, chunk clipping and per-vertex DEM alignment',result:'PASS'},null,2));

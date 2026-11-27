@@ -5,3 +5,10 @@ export function drapeAtGradeRoadVertex(
   verticalOffsetM: number,
   elevationAt: (x:number,z:number)=>number|null
 ): NYCDrapedRoadSurfacePoint;
+
+export function sampleTriangulatedTerrainSurface(
+  worldX: number,
+  worldZ: number,
+  gridSpacingM: number,
+  sampleGridHeight: (gridX: number, gridZ: number) => number | null
+): number;

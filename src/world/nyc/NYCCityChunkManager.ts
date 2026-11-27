@@ -12,7 +12,9 @@ import { NYCBuildingFootprintLoader } from './NYCBuildingFootprintLoader';
 import type { NYCBuildingFootprint } from './NYCBuildingFootprintLoader';
 import { NYCTerrainLoader } from './NYCTerrainLoader';
 import { localBoundsToGeographic } from './NYCGeo';
-import { drapeAtGradeRoadVertex } from './nyc-road-surface-core.mjs';
+import {
+  drapeAtGradeRoadVertex, sampleTriangulatedTerrainSurface,
+} from './nyc-road-surface-core.mjs';
 import {
   boundsOverlap, clipTriangleToBounds, liftBuildingVertexToTerrain,
 } from './nyc-building-geometry-core.mjs';
@@ -654,6 +656,21 @@ export class NYCCityChunkManager {
     // surrounding block parcels rise and fall.
     const terrainStepM = 16;
     const terrainCells = Math.round(CITY_CHUNK_SIZE_M / terrainStepM);
+    // Keep the exact grid samples used by the rendered terrain mesh. Roads and
+    // buildings interpolate these same triangles, not a different raw-DEM curve.
+    const terrainGridHeightCache = new Map<string, number>();
+    const sampleTerrainGridHeight = (gridX: number, gridZ: number): number => {
+      const key = gridX + ':' + gridZ;
+      const cached = terrainGridHeightCache.get(key);
+      if (cached !== undefined) return cached;
+      const height = this.sampleTerrainHeight(gridX * terrainStepM, gridZ * terrainStepM);
+      terrainGridHeightCache.set(key, height);
+      return height;
+    };
+    const sampleTerrainMeshSurface = (worldX: number, worldZ: number): number =>
+      sampleTriangulatedTerrainSurface(
+        worldX, worldZ, terrainStepM, sampleTerrainGridHeight,
+      );
     const terrainGrass = new THREE.Color(0x65715d);
     const terrainSoil = new THREE.Color(0x807666);
     const terrainColour = new THREE.Color();
@@ -661,7 +678,10 @@ export class NYCCityChunkManager {
       const worldZ = minZ + gridZ * terrainStepM;
       for (let gridX = 0; gridX <= terrainCells; gridX++) {
         const worldX = minX + gridX * terrainStepM;
-        const height = this.sampleTerrainHeight(worldX, worldZ);
+        const height = sampleTerrainGridHeight(
+          Math.round(worldX / terrainStepM),
+          Math.round(worldZ / terrainStepM),
+        );
         groundPositions.push(worldX - centerX, height, worldZ - centerZ);
 
         const elevationTint = THREE.MathUtils.clamp((height + 0.405 + 1.1) / 5.5, 0, 0.42);
@@ -692,31 +712,32 @@ export class NYCCityChunkManager {
       for (const segment of segments) {
         roadLines.add(segment.id);
         const elevated = segment.roadType !== 'surface';
+        const terrainSurfaceSampler = elevated ? undefined : sampleTerrainMeshSurface;
         if (elevated) {
           this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
-            elevatedRoadPositions, elevatedRoadIndices, segment.profile.widthM, 0.035, 0);
+            elevatedRoadPositions, elevatedRoadIndices, segment.profile.widthM, 0.035, 0, terrainSurfaceSampler);
           this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
             elevatedUndersidePositions, elevatedUndersideIndices, segment.profile.widthM, -1.2, 0);
         } else {
           this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
-            roadPositions, roadIndices, segment.profile.widthM, 0.035, 0);
+            roadPositions, roadIndices, segment.profile.widthM, 0.035, 0, terrainSurfaceSampler);
           for (const side of [-1, 1]) {
             this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
               sidewalkPositions, sidewalkIndices, 3.2, 0.12,
-              side * (segment.profile.widthM * 0.5 + 2.0));
+              side * (segment.profile.widthM * 0.5 + 2.0), terrainSurfaceSampler);
           }
         }
         if (segment.profile.directionality === 'both') {
           for (const offset of [-0.17, 0.17]) {
             this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
-              yellowPositions, yellowIndices, 0.12, 0.065, offset);
+              yellowPositions, yellowIndices, 0.12, 0.065, offset, terrainSurfaceSampler);
           }
           for (const side of [-1, 1]) {
             for (let lane = 1; lane < segment.profile.lanesPerDirection; lane++) {
               const offset = side * (segment.profile.lanesPerDirection - lane)
                 * segment.profile.laneWidthM;
               this.appendRoadRibbon(segment, chunkBounds, centerX, centerZ,
-                whitePositions, whiteIndices, 0.105, 0.065, offset);
+                whitePositions, whiteIndices, 0.105, 0.065, offset, terrainSurfaceSampler);
             }
           }
         } else {
@@ -851,12 +872,12 @@ export class NYCCityChunkManager {
         const worldX = minX + gridX * terrainStepM;
         const worldZ = minZ + gridZ * terrainStepM;
         const gradientX = (
-          this.sampleTerrainHeight(worldX + 1, worldZ)
-          - this.sampleTerrainHeight(worldX - 1, worldZ)
+          sampleTerrainMeshSurface(worldX + 1, worldZ)
+          - sampleTerrainMeshSurface(worldX - 1, worldZ)
         ) * 0.5;
         const gradientZ = (
-          this.sampleTerrainHeight(worldX, worldZ + 1)
-          - this.sampleTerrainHeight(worldX, worldZ - 1)
+          sampleTerrainMeshSurface(worldX, worldZ + 1)
+          - sampleTerrainMeshSurface(worldX, worldZ - 1)
         ) * 0.5;
         normal.set(-gradientX, 1, -gradientZ).normalize();
         terrainNormals[index * 3] = normal.x;
@@ -933,15 +954,7 @@ export class NYCCityChunkManager {
           // The footprint base is draped over the same NAVD88 DEM used by the
           // visible terrain; every chunk-clipped vertex gets its own elevation.
           const height = THREE.MathUtils.clamp(building.heightM, 2.5, 500);
-          const sampledGround = new Map<string, number>();
-          const elevationAt = (x: number, z: number): number => {
-            const sampleKey = x.toFixed(3) + ':' + z.toFixed(3);
-            const cached = sampledGround.get(sampleKey);
-            if (cached !== undefined) return cached;
-            const elevation = this.sampleTerrainHeight(x, z);
-            sampledGround.set(sampleKey, elevation);
-            return elevation;
-          };
+          const elevationAt = sampleTerrainMeshSurface;
           const extrusion = new THREE.ExtrudeGeometry(shape, {
             depth: height,
             bevelEnabled: false,
@@ -1290,6 +1303,7 @@ export class NYCCityChunkManager {
     width: number,
     verticalOffset: number,
     lateralOffset: number,
+    terrainSurfaceAt?: (x: number, z: number) => number,
   ): void {
     const sampleCount = Math.max(8, Math.ceil(segment.lengthM / 4));
     const samples: Array<{ left: THREE.Vector3; right: THREE.Vector3; center: THREE.Vector3 }> = [];
@@ -1308,9 +1322,11 @@ export class NYCCityChunkManager {
       const leftEdge = center.clone().addScaledVector(right, -width * 0.5);
       const rightEdge = center.clone().addScaledVector(right, width * 0.5);
       if (isGisGroundSurface) {
-        const elevationAt = (x: number, z: number) => this.sampleTerrainHeight(x, z);
-        const drapedLeft = drapeAtGradeRoadVertex(leftEdge, verticalOffset, elevationAt);
-        const drapedRight = drapeAtGradeRoadVertex(rightEdge, verticalOffset, elevationAt);
+        if (!terrainSurfaceAt) {
+          throw new Error('At-grade NYC road ribbons require the active chunk terrain-mesh sampler.');
+        }
+        const drapedLeft = drapeAtGradeRoadVertex(leftEdge, verticalOffset, terrainSurfaceAt);
+        const drapedRight = drapeAtGradeRoadVertex(rightEdge, verticalOffset, terrainSurfaceAt);
         leftEdge.set(drapedLeft.x, drapedLeft.y, drapedLeft.z);
         rightEdge.set(drapedRight.x, drapedRight.y, drapedRight.z);
       }
