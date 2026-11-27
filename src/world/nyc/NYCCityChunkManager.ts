@@ -12,6 +12,7 @@ import { NYCBuildingFootprintLoader } from './NYCBuildingFootprintLoader';
 import type { NYCBuildingFootprint } from './NYCBuildingFootprintLoader';
 import { NYCTerrainLoader } from './NYCTerrainLoader';
 import { localBoundsToGeographic } from './NYCGeo';
+import { drapeAtGradeRoadVertex } from './nyc-road-surface-core.mjs';
 import {
   boundsOverlap, clipTriangleToBounds, liftBuildingVertexToTerrain,
 } from './nyc-building-geometry-core.mjs';
@@ -1295,15 +1296,25 @@ export class NYCCityChunkManager {
     for (let i = 0; i <= sampleCount; i++) {
       const distance = segment.lengthM * i / sampleCount;
       const pose = this.graph.getCenterlinePose(segment.id, distance);
+      const isGisGroundSurface = this.graph instanceof NYCGISRoadGraph
+        && segment.roadType === 'surface';
       const center = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z)
         .addScaledVector(new THREE.Vector3(pose.right.x, pose.right.y, pose.right.z), lateralOffset)
-        .addScaledVector(new THREE.Vector3(pose.up.x, pose.up.y, pose.up.z), verticalOffset);
+        .addScaledVector(
+          new THREE.Vector3(pose.up.x, pose.up.y, pose.up.z),
+          isGisGroundSurface ? 0 : verticalOffset,
+        );
       const right = new THREE.Vector3(pose.right.x, pose.right.y, pose.right.z);
-      samples.push({
-        center,
-        left: center.clone().addScaledVector(right, -width * 0.5),
-        right: center.clone().addScaledVector(right, width * 0.5),
-      });
+      const leftEdge = center.clone().addScaledVector(right, -width * 0.5);
+      const rightEdge = center.clone().addScaledVector(right, width * 0.5);
+      if (isGisGroundSurface) {
+        const elevationAt = (x: number, z: number) => this.sampleTerrainHeight(x, z);
+        const drapedLeft = drapeAtGradeRoadVertex(leftEdge, verticalOffset, elevationAt);
+        const drapedRight = drapeAtGradeRoadVertex(rightEdge, verticalOffset, elevationAt);
+        leftEdge.set(drapedLeft.x, drapedLeft.y, drapedLeft.z);
+        rightEdge.set(drapedRight.x, drapedRight.y, drapedRight.z);
+      }
+      samples.push({ center, left: leftEdge, right: rightEdge });
     }
     for (let i = 0; i < samples.length - 1; i++) {
       const a = samples[i];
