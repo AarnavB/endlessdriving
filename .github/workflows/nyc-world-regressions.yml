@@ -134,15 +134,15 @@ jobs:
           NYC_GRAPH_RESULT: ${{ steps.nyc_graph.outcome }}
           NYC_TERRAIN_RESULT: ${{ steps.nyc_terrain.outcome }}
         run: |
-          printf 'build: %s\\n' "$BUILD_RESULT"
-          printf 'test:drivetrain: %s\\n' "$DRIVETRAIN_RESULT"
-          printf 'test:nyc-geo: %s\\n' "$NYC_GEO_RESULT"
-          printf 'test:city-urban: %s\\n' "$CITY_URBAN_RESULT"
-          printf 'test:city-routing: %s\\n' "$CITY_ROUTING_RESULT"
-          printf 'test:world: %s\\n' "$WORLD_RESULT"
-          printf 'bake:nyc:world: %s\\n' "$NYC_BAKE_RESULT"
-          printf 'test:nyc-road-graph: %s\\n' "$NYC_GRAPH_RESULT"
-          printf 'test:nyc-terrain: %s\\n' "$NYC_TERRAIN_RESULT"
+          printf 'build: %s\n' "$BUILD_RESULT"
+          printf 'test:drivetrain: %s\n' "$DRIVETRAIN_RESULT"
+          printf 'test:nyc-geo: %s\n' "$NYC_GEO_RESULT"
+          printf 'test:city-urban: %s\n' "$CITY_URBAN_RESULT"
+          printf 'test:city-routing: %s\n' "$CITY_ROUTING_RESULT"
+          printf 'test:world: %s\n' "$WORLD_RESULT"
+          printf 'bake:nyc:world: %s\n' "$NYC_BAKE_RESULT"
+          printf 'test:nyc-road-graph: %s\n' "$NYC_GRAPH_RESULT"
+          printf 'test:nyc-terrain: %s\n' "$NYC_TERRAIN_RESULT"
           test "$BUILD_RESULT" = success
           test "$DRIVETRAIN_RESULT" = success
           test "$NYC_GEO_RESULT" = success

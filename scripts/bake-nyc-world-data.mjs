@@ -187,13 +187,27 @@ async function main() {
     const cached = JSON.parse(await readFile(cachedPath, 'utf8'));
     if (cached?.schema !== 'endless-driving.nyc-street-network'
       || cached.schemaVersion !== 3 || !Array.isArray(cached.features)
-      || cached.features.length === 0 || !cached.bounds) {
+      || cached.features.length === 0 || !cached.bounds
+      || !cached.graph?.diagnostics?.intersectionNoding
+      || !Number.isInteger(cached.graph.diagnostics.intersectionNoding.pathsAfter)) {
       throw new Error('Cached NYC road network is not a validated normalized CSCL source snapshot.');
     }
     bounds = cached.bounds;
-    // Rebuild only the graph and spatial tiles. The expensive CSCL API query
-    // and source-geometry normalization are already represented in this file.
-    payload = { ...cached, graph: buildCSCLRoadGraph(cached.features) };
+    // The cached paths already contain the original intersection splits. A
+    // second noding pass therefore reports zero new splits; preserve the
+    // original bake's source-noding audit while rebuilding the directed graph
+    // with the current runtime edge eligibility rules.
+    const sourceNodingDiagnostics = cached.graph.diagnostics.intersectionNoding;
+    const cachedPathCount = cached.features.reduce((count, feature) => count + feature.paths.length, 0);
+    if (sourceNodingDiagnostics.pathsAfter !== cachedPathCount
+      || sourceNodingDiagnostics.pathsBefore < sourceNodingDiagnostics.pathsAfter
+      || sourceNodingDiagnostics.sameLevelEndpointInteriorCount
+        + sourceNodingDiagnostics.sameLevelInteriorInteriorCount <= 0) {
+      throw new Error('Cached NYC CSCL source-noding audit does not match the retained normalized paths.');
+    }
+    const graph = buildCSCLRoadGraph(cached.features);
+    graph.diagnostics.intersectionNoding = sourceNodingDiagnostics;
+    payload = { ...cached, graph };
     process.stdout.write('Re-indexing the retained normalized NYC CSCL source features.\\n');
   } else {
     const sourceFeatures = await downloadCSCL(bounds);
