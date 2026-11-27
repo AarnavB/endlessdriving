@@ -9,7 +9,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "test:drivetrain": "node tests/drivetrain-regression.mjs",
     "test:nyc-geo": "node tests/nyc-geo-regression.mjs",
-    "test:world": "npm run test:nyc-geo && npm run test:city-urban && npm run test:city-routing && npm run test:nyc-road-data && npm run test:nyc-road-graph && npm run test:nyc-building-geometry && npm run test:nyc-terrain-sampling && npm run test:nyc-terrain && npm run test:nyc-runtime",
+    "test:world": "npm run test:nyc-geo && npm run test:city-urban && npm run test:city-routing && npm run test:nyc-road-data && npm run test:nyc-road-graph && npm run test:nyc-building-geometry && npm run test:nyc-road-surface && npm run test:nyc-terrain-sampling && npm run test:nyc-terrain && npm run test:nyc-runtime",
     "test:city-routing": "node tests/city-routing-regression.mjs",
     "test:city-urban": "node tests/city-urban-regression.mjs",
     "bake:nyc:roads": "node scripts/bake-nyc-world-data.mjs",
@@ -24,7 +24,8 @@
     "test:nyc-terrain-sampling": "node tests/nyc-terrain-sampling-regression.mjs",
     "test:nyc-building-geometry": "node tests/nyc-building-geometry-regression.mjs",
     "reindex:nyc:roads": "node scripts/bake-nyc-world-data.mjs --input-network public/data/nyc/nyc-street-network.json",
-    "index:nyc:buildings": "node scripts/index-nyc-building-footprints.mjs"
+    "index:nyc:buildings": "node scripts/index-nyc-building-footprints.mjs",
+    "test:nyc-road-surface": "node tests/nyc-road-surface-regression.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
