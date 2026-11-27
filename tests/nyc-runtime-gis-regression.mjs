@@ -191,6 +191,11 @@ assert.throws(() => runtimeGraph.findRoute('n2','n0'),
 assert.throws(() => runtimeGraph.getIntersectionId(0,0),
   /Grid intersection IDs are disabled/,
   'runtime GIS graph must not synthesize grid intersections');
+assert.throws(
+  () => new NYCGISRoadGraph([fixture], {x:0,y:0,z:0}, () => null),
+  /NYC DEM has no validated elevation/,
+  'at-grade nodes must not retain a fabricated zero-metre elevation when DEM sampling fails',
+);
 const terrainGraph = new NYCGISRoadGraph([fixture], {x:0,y:0,z:0}, (x,z) => 2 + x * 0.01 + z * 0.02);
 assert.equal(terrainGraph.getIntersection('n0').position.y, 2,
   'at-grade source nodes use the validated DEM elevation sampler');

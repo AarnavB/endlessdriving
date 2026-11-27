@@ -254,7 +254,10 @@ export class NYCGISRoadGraph extends CityRoadGraph {
     const code=Number.isInteger(source.levelCode)?source.levelCode:null,levelCode=code===null||code===99?13:code;
     if(levelCode===13&&this.terrainHeightAt) {
       const height=this.terrainHeightAt(p.x,p.z);
-      if(height!==null&&Number.isFinite(height))p.y=height;
+      if(height===null||!Number.isFinite(height)) {
+        throw new Error('NYC DEM has no validated elevation for at-grade CSCL node '+source.id+'.');
+      }
+      p.y=height;
     }
     const kind:CityRoadLevelKind=levelCode<13?'underpass':levelCode>13?'elevated':'ground';
     const node:CityIntersection={id:source.id,gridX:Math.round(p.x/160),gridZ:Math.round(p.z/160),position:{...p},elevationM:p.y,level:levelCode-13,kind,intersectionType:kind==='ground'?'at-grade':'grade-separated',signalControlled:kind==='ground'&&source.degree>=3,signalOffsetSeconds:hash(source.id)%5600/100};
@@ -275,6 +278,9 @@ export class NYCGISRoadGraph extends CityRoadGraph {
       &&type!=='bridge'&&type!=='tunnel'&&type!=='ramp';
     const geometry=source.geometry.map(p=>{
       const height=atGrade?this.terrainHeightAt?.(p.x,p.z):null;
+      if(atGrade&&this.terrainHeightAt&&(height===null||height===undefined||!Number.isFinite(height))) {
+        throw new Error('NYC DEM has no validated elevation for at-grade CSCL edge '+source.id+'.');
+      }
       return {x:p.x,y:height!==null&&height!==undefined&&Number.isFinite(height)?height:p.y,z:p.z};
     });
     if(geometry.some(p=>![p.x,p.y,p.z].every(Number.isFinite)))throw new Error('Non-finite CSCL geometry '+source.id);

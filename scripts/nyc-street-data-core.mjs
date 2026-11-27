@@ -612,6 +612,7 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
   let selfLoopEdgeCount = 0;
   let unknownDirectionEdgeCount = 0;
   let zeroLengthEdgeCount = 0;
+  let shortEdgeCount = 0;
 
   for (const feature of features) {
     if ((feature.sourceDisconnectedPathCount ?? 0) > 0) {
@@ -635,6 +636,11 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       const lengthM = path.slice(1).reduce((total, point, index) =>
         total + Math.hypot(point.x - path[index].x, point.z - path[index].z), 0);
       if (lengthM <= 0.01) zeroLengthEdgeCount++;
+      // Match the runtime graph's one-metre minimum before creating drivable tiles.
+      if (lengthM <= 1) {
+        shortEdgeCount++;
+        continue;
+      }
       if (from.id === to.id) { selfLoopEdgeCount++; from.loopCount++; }
       if (allowedDirections.length === 0) unknownDirectionEdgeCount++;
 
@@ -672,6 +678,14 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       }
       adjacency.get(from.id).add(to.id);
       adjacency.get(to.id).add(from.id);
+    }
+  }
+
+  // Discard orphan nodes created only by paths rejected at the runtime length threshold.
+  for (const [nodeId, node] of nodes) {
+    if (node.incidentEdgeIds.length === 0) {
+      nodes.delete(nodeId);
+      adjacency.delete(nodeId);
     }
   }
 
@@ -757,6 +771,7 @@ export function buildCSCLRoadGraph(features, toleranceM = 0.75) {
       oneWayEdgeCount,
       unknownDirectionEdgeCount,
       zeroLengthEdgeCount,
+      shortEdgeCount,
       selfLoopEdgeCount,
       coincidentDifferentLevelNodePairCount: differentLevelPairs.size,
       intersectionNoding: nodingDiagnostics,

@@ -1,4 +1,6 @@
 import { localToGeographic, type GeographicBounds } from './NYCGeo';
+import { sampleNYCTerrainRaster } from './nyc-terrain-sampling-core.mjs';
+export { sampleNYCTerrainRaster } from './nyc-terrain-sampling-core.mjs';
 
 export interface NYCTerrainTileBounds {
   north: number; south: number; east: number; west: number;
@@ -55,41 +57,6 @@ function hex(bytes: ArrayBuffer): string {
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
-export function sampleNYCTerrainRaster(
-  heights: Float32Array,
-  width: number,
-  height: number,
-  bounds: NYCTerrainTileBounds,
-  longitude: number,
-  latitude: number,
-): number | null {
-  const u = clamp(
-    ((longitude - bounds.west) / (bounds.east - bounds.west)) * width - 0.5,
-    0, width - 1,
-  );
-  const v = clamp(
-    ((bounds.north - latitude) / (bounds.north - bounds.south)) * height - 0.5,
-    0, height - 1,
-  );
-  const x0 = Math.floor(u), y0 = Math.floor(v);
-  const x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1);
-  const tx = u - x0, ty = v - y0;
-  const samples: Array<[number, number]> = [
-    [heights[y0 * width + x0], (1 - tx) * (1 - ty)],
-    [heights[y0 * width + x1], tx * (1 - ty)],
-    [heights[y1 * width + x0], (1 - tx) * ty],
-    [heights[y1 * width + x1], tx * ty],
-  ];
-  let weighted = 0, totalWeight = 0;
-  for (const [value, weight] of samples) {
-    if (Number.isFinite(value) && weight > 0) {
-      weighted += value * weight;
-      totalWeight += weight;
-    }
-  }
-  return totalWeight > 0 ? weighted / totalWeight : null;
-}
-
 /** Checksummed LRU loader for the NYC 2017 NAVD88 bare-earth elevation surface. */
 export class NYCTerrainLoader {
   private manifestPromise: Promise<NYCTerrainManifest> | null = null;

@@ -34,7 +34,13 @@ assert(Array.isArray(graph.nodes) && graph.nodes.length > 0);
 assert(Array.isArray(graph.edges) && graph.edges.length > 0);
 assert.equal(graph.diagnostics.nodeCount, graph.nodes.length);
 assert.equal(graph.diagnostics.edgeCount, graph.edges.length);
-assert.equal(graph.edges.length, network.features.reduce((total, feature) => total + feature.paths.length, 0));
+assert.equal(
+  graph.edges.length + graph.diagnostics.shortEdgeCount,
+  network.features.reduce((total, feature) => total + feature.paths.length, 0),
+  'every normalized CSCL path is retained or rejected by the one-metre runtime threshold',
+);
+assert.equal(graph.diagnostics.shortEdgeCount, 6,
+  'the six known sub-metre CSCL paths must be excluded consistently with runtime routing');
 assert(graph.diagnostics.largestComponentShare > 0.9,
   'the largest connected street component must contain more than 90% of graph nodes');
 assert.equal(graph.diagnostics.isolatedNodeCount, 0);
@@ -71,7 +77,7 @@ for (const edge of graph.edges) {
   const feature = features.get(edge.geometryRef.featureId);
   assert(feature, 'every graph edge must reference a baked source feature');
   assert(feature.paths[edge.geometryRef.pathIndex], 'every graph edge must reference a baked geometry path');
-  assert(edge.lengthM > 1, 'every retained graph edge must have a plausible positive length');
+  assert(edge.lengthM > 1, 'every retained graph edge must exceed the runtime one-metre minimum');
   assert(Number.isInteger(edge.fromLevelCode) && Number.isInteger(edge.toLevelCode),
     'grade codes must be retained at both segment endpoints');
 
