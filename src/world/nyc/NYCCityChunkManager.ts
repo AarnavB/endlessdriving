@@ -586,13 +586,17 @@ export class NYCCityChunkManager {
         // A large footprint may be owned by a distant centroid tile. Load the
         // DEM covering those centroids before sampling each building's base.
         if (buildingFootprints.length > 0) {
+          const terrainLoader = this.terrainLoader;
+          if (!terrainLoader) {
+            throw new Error('GIS world streaming requires the validated NYC 2017 DEM loader.');
+          }
           const centroidBounds = buildingFootprints.reduce((bounds, building) => ({
             minX: Math.min(bounds.minX, building.centroid.x),
             maxX: Math.max(bounds.maxX, building.centroid.x),
             minZ: Math.min(bounds.minZ, building.centroid.z),
             maxZ: Math.max(bounds.maxZ, building.centroid.z),
           }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
-          const centroidTerrainTiles = await this.terrainLoader.loadTilesForBounds(localBoundsToGeographic({
+          const centroidTerrainTiles = await terrainLoader.loadTilesForBounds(localBoundsToGeographic({
             minX: centroidBounds.minX - 24,
             maxX: centroidBounds.maxX + 24,
             minZ: centroidBounds.minZ - 24,

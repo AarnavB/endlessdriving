@@ -54,9 +54,6 @@ function intersects(a: NYCTerrainTileBounds, b: GeographicBounds): boolean {
 function hex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, '0')).join('');
 }
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
 /** Checksummed LRU loader for the NYC 2017 NAVD88 bare-earth elevation surface. */
 export class NYCTerrainLoader {
   private manifestPromise: Promise<NYCTerrainManifest> | null = null;
