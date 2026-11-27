@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { geographicToLocalENU, CSCL_DEFAULT_BOUNDS } from './nyc-street-data-core.mjs';
+import { calculateFootprintBounds, unionFootprintBounds } from '../src/world/nyc/nyc-building-geometry-core.mjs';
 
 const DATASET_ID = '5zhs-2jue';
 const PAGE_SIZE = 4000;
@@ -145,6 +146,7 @@ function normalizeFeature(feature) {
       ? sourceHeightFt * FEET_TO_METRES : null,
     heightSource: sourceHeightFt !== null && sourceHeightFt > 0 ? 'height_roof' : 'feature-code-median',
     centroid,
+    bounds: calculateFootprintBounds(polygons),
     polygons,
   };
 }
@@ -192,8 +194,9 @@ function makeTiles(buildings) {
     const x = Math.floor(building.centroid.x / TILE_SIZE_M);
     const z = Math.floor(building.centroid.z / TILE_SIZE_M);
     const id = x + ':' + z;
-    const tile = tiles.get(id) ?? { id, x, z, buildings: new Map() };
+    const tile = tiles.get(id) ?? { id, x, z, buildings: new Map(), footprintBounds: null };
     tile.buildings.set(building.id, building);
+    tile.footprintBounds = unionFootprintBounds(tile.footprintBounds, building.bounds);
     tiles.set(id, tile);
   }
   return [...tiles.values()].sort((a, b) => a.z - b.z || a.x - b.x);
@@ -211,9 +214,10 @@ async function writeTiles(outDir, buildings) {
     };
     const content = JSON.stringify({
       schema: 'endless-driving.nyc-building-tile',
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: tile.id,
       bounds,
+      footprintBounds: tile.footprintBounds,
       buildings: [...tile.buildings.values()],
     }) + '\n';
     const bytes = Buffer.byteLength(content);
@@ -221,7 +225,7 @@ async function writeTiles(outDir, buildings) {
     const path = 'tiles/' + tile.x + '_' + tile.z + '.json';
     await writeFile(resolve(outDir, path), content, 'utf8');
     records.push({
-      id: tile.id, path, bounds, sha256, bytes,
+      id: tile.id, path, bounds, footprintBounds: tile.footprintBounds, sha256, bytes,
       buildingCount: tile.buildings.size,
     });
   }
@@ -251,7 +255,7 @@ async function main() {
   for (const building of buildings) boroughCounts[boroughFromBin(building.bin)]++;
   const manifest = {
     schema: 'endless-driving.nyc-building-network',
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: new Date().toISOString(),
     retrievedAt,
     tileSizeM: TILE_SIZE_M,

@@ -1,8 +1,9 @@
+import { boundsOverlap } from './nyc-building-geometry-core.mjs';
 export interface NYCBuildingTileBounds {
   minX: number; maxX: number; minZ: number; maxZ: number;
 }
 export interface NYCBuildingTileRecord {
-  id: string; path: string; bounds: NYCBuildingTileBounds;
+  id: string; path: string; bounds: NYCBuildingTileBounds; footprintBounds: NYCBuildingTileBounds;
   sha256: string; bytes: number; buildingCount: number;
 }
 export interface NYCBuildingFootprint {
@@ -18,19 +19,21 @@ export interface NYCBuildingFootprint {
   heightM: number;
   heightSource: 'height_roof' | 'feature-code-median' | 'configurable-fallback';
   centroid: { x: number; z: number };
+  bounds: NYCBuildingTileBounds;
   /** MultiPolygon -> Polygon -> (outer ring, inner rings) -> local ENU points. */
   polygons: Array<Array<Array<{ x: number; z: number }>>>;
 }
 export interface NYCBuildingTile {
   schema: 'endless-driving.nyc-building-tile';
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   bounds: NYCBuildingTileBounds;
+  footprintBounds: NYCBuildingTileBounds;
   buildings: NYCBuildingFootprint[];
 }
 export interface NYCBuildingManifest {
   schema: 'endless-driving.nyc-building-network';
-  schemaVersion: 2;
+  schemaVersion: 3;
   generatedAt: string;
   retrievedAt: string;
   tileSizeM: number;
@@ -50,9 +53,6 @@ export interface NYCBuildingManifest {
 }
 export interface NYCBuildingBoundsRequest {
   minX: number; maxX: number; minZ: number; maxZ: number;
-}
-function overlaps(a: NYCBuildingTileBounds, b: NYCBuildingBoundsRequest): boolean {
-  return a.maxX >= b.minX && a.minX <= b.maxX && a.maxZ >= b.minZ && a.minZ <= b.maxZ;
 }
 function hex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, '0')).join('');
@@ -78,7 +78,7 @@ export class NYCBuildingFootprintLoader {
       throw new RangeError('Invalid NYC building tile bounds request.');
     }
     const manifest = await this.loadManifest();
-    return Promise.all(manifest.tiles.filter((tile) => overlaps(tile.bounds, bounds))
+    return Promise.all(manifest.tiles.filter((tile) => boundsOverlap(tile.footprintBounds, bounds))
       .map((record) => this.loadTile(record)));
   }
 
@@ -108,7 +108,7 @@ export class NYCBuildingFootprintLoader {
     const response = await this.fetchWithRetry(this.baseUrl + 'manifest.json');
     const manifest = await response.json() as NYCBuildingManifest;
     if (!manifest || manifest.schema !== 'endless-driving.nyc-building-network'
-      || manifest.schemaVersion !== 2 || !Array.isArray(manifest.tiles)
+      || manifest.schemaVersion !== 3 || !Array.isArray(manifest.tiles)
       || manifest.tiles.length === 0 || manifest.source?.datasetId !== '5zhs-2jue'
       || !Number.isFinite(manifest.tileSizeM) || manifest.tileSizeM <= 0) {
       throw new Error('NYC building manifest failed schema/source validation.');
@@ -121,6 +121,8 @@ export class NYCBuildingFootprintLoader {
         || !Number.isInteger(tile.buildingCount) || tile.buildingCount <= 0
         || !tile.bounds || ![
           tile.bounds.minX, tile.bounds.maxX, tile.bounds.minZ, tile.bounds.maxZ,
+          tile.footprintBounds?.minX, tile.footprintBounds?.maxX,
+          tile.footprintBounds?.minZ, tile.footprintBounds?.maxZ,
         ].every(Number.isFinite)) {
         throw new Error('NYC building manifest contains an invalid or duplicate tile record.');
       }
@@ -153,7 +155,12 @@ export class NYCBuildingFootprintLoader {
       }
       const tile = JSON.parse(new TextDecoder().decode(bytes)) as NYCBuildingTile;
       if (tile.schema !== 'endless-driving.nyc-building-tile'
-        || tile.schemaVersion !== 1 || tile.id !== record.id
+        || tile.schemaVersion !== 2 || tile.id !== record.id
+        || !tile.footprintBounds
+        || tile.footprintBounds.minX !== record.footprintBounds.minX
+        || tile.footprintBounds.maxX !== record.footprintBounds.maxX
+        || tile.footprintBounds.minZ !== record.footprintBounds.minZ
+        || tile.footprintBounds.maxZ !== record.footprintBounds.maxZ
         || !Array.isArray(tile.buildings) || tile.buildings.length !== record.buildingCount) {
         throw new Error('NYC building tile schema/count validation failed: ' + record.id);
       }
@@ -165,6 +172,9 @@ export class NYCBuildingFootprintLoader {
           || !Number.isFinite(building.heightM) || building.heightM < 2.5 || building.heightM > 500
           || !building.centroid || !Number.isFinite(building.centroid.x)
           || !Number.isFinite(building.centroid.z)
+          || !building.bounds || ![
+            building.bounds.minX, building.bounds.maxX, building.bounds.minZ, building.bounds.maxZ,
+          ].every(Number.isFinite)
           || !Array.isArray(building.polygons) || building.polygons.length === 0) {
           throw new Error('NYC building tile contains invalid footprint metadata: ' + record.id);
         }
