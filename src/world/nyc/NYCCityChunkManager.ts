@@ -12,7 +12,9 @@ import { NYCBuildingFootprintLoader } from './NYCBuildingFootprintLoader';
 import type { NYCBuildingFootprint } from './NYCBuildingFootprintLoader';
 import { NYCTerrainLoader } from './NYCTerrainLoader';
 import { localBoundsToGeographic } from './NYCGeo';
-import { boundsOverlap, clipTriangleToBounds } from './nyc-building-geometry-core.mjs';
+import {
+  boundsOverlap, clipTriangleToBounds, liftBuildingVertexToTerrain,
+} from './nyc-building-geometry-core.mjs';
 import {
   CitySpatialIndex,
   citySpatialHash,
@@ -583,27 +585,22 @@ export class NYCCityChunkManager {
           }
         }
         buildingFootprints = [...uniqueBuildings.values()];
-        // A large footprint may be owned by a distant centroid tile. Load the
-        // DEM covering those centroids before sampling each building's base.
         if (buildingFootprints.length > 0) {
           const terrainLoader = this.terrainLoader;
           if (!terrainLoader) {
             throw new Error('GIS world streaming requires the validated NYC 2017 DEM loader.');
           }
-          const centroidBounds = buildingFootprints.reduce((bounds, building) => ({
-            minX: Math.min(bounds.minX, building.centroid.x),
-            maxX: Math.max(bounds.maxX, building.centroid.x),
-            minZ: Math.min(bounds.minZ, building.centroid.z),
-            maxZ: Math.max(bounds.maxZ, building.centroid.z),
-          }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
-          const centroidTerrainTiles = await terrainLoader.loadTilesForBounds(localBoundsToGeographic({
-            minX: centroidBounds.minX - 24,
-            maxX: centroidBounds.maxX + 24,
-            minZ: centroidBounds.minZ - 24,
-            maxZ: centroidBounds.maxZ + 24,
+          // Every clipped footprint vertex is sampled independently. Include
+          // the 20 m NoData search radius around this chunk so a boundary vertex
+          // can use a nearby valid DEM sample from the neighbouring raster tile.
+          const chunkTerrainTiles = await terrainLoader.loadTilesForBounds(localBoundsToGeographic({
+            minX: requestedBuildingBounds.minX - 24,
+            maxX: requestedBuildingBounds.maxX + 24,
+            minZ: requestedBuildingBounds.minZ - 24,
+            maxZ: requestedBuildingBounds.maxZ + 24,
           }));
-          if (centroidTerrainTiles.length === 0) {
-            throw new Error('No validated NYC DEM tiles cover building base elevations for world chunk ' + key + '.');
+          if (chunkTerrainTiles.length === 0) {
+            throw new Error('No validated NYC DEM tiles cover building vertices for world chunk ' + key + '.');
           }
         }
       }
@@ -932,12 +929,18 @@ export class NYCCityChunkManager {
 
           // HEIGHT_ROOF is authoritative where available. Missing values use
           // a feature-code median baked into the tile, with provenance preserved.
-          // The polygon extrusion base is lifted to the same NAVD88 DEM sample
-          // used by the rendered terrain and Rapier ground collision.
+          // The footprint base is draped over the same NAVD88 DEM used by the
+          // visible terrain; every chunk-clipped vertex gets its own elevation.
           const height = THREE.MathUtils.clamp(building.heightM, 2.5, 500);
-          const groundElevationM = this.sampleTerrainHeight(
-            building.centroid.x, building.centroid.z,
-          );
+          const sampledGround = new Map<string, number>();
+          const elevationAt = (x: number, z: number): number => {
+            const sampleKey = x.toFixed(3) + ':' + z.toFixed(3);
+            const cached = sampledGround.get(sampleKey);
+            if (cached !== undefined) return cached;
+            const elevation = this.sampleTerrainHeight(x, z);
+            sampledGround.set(sampleKey, elevation);
+            return elevation;
+          };
           const extrusion = new THREE.ExtrudeGeometry(shape, {
             depth: height,
             bevelEnabled: false,
@@ -957,7 +960,9 @@ export class NYCCityChunkManager {
                 const vertex = sourceIndex ? sourceIndex.getX(triangle + corner) : triangle + corner;
                 return {
                   x: attribute.getX(vertex) + centerX,
-                  y: attribute.getY(vertex) + groundElevationM,
+                  // Keep the extrusion's vertical offset here; terrain is
+                  // sampled after clipping so off-chunk vertices need no DEM.
+                  y: attribute.getY(vertex),
                   z: attribute.getZ(vertex) + centerZ,
                 };
               }) as [{x:number;y:number;z:number},{x:number;y:number;z:number},{x:number;y:number;z:number}];
@@ -965,7 +970,10 @@ export class NYCCityChunkManager {
               if (clipped.length < 3) continue;
               const base = gisBuildingPositions.length / 3;
               for (const point of clipped) {
-                gisBuildingPositions.push(point.x - centerX, point.y, point.z - centerZ);
+                const lifted = liftBuildingVertexToTerrain(point, elevationAt);
+                gisBuildingPositions.push(
+                  lifted.x - centerX, lifted.y, lifted.z - centerZ,
+                );
               }
               for (let index = 1; index < clipped.length - 1; index++) {
                 gisBuildingIndices.push(base, base + index, base + index + 1);

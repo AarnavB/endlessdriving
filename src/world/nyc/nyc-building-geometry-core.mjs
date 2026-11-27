@@ -46,3 +46,19 @@ export function clipTriangleToBounds(triangle,bounds) {
   }
   return polygon;
 }
+
+/** Lift a building vertex by its own validated ground sample, preserving its roof offset. */
+export function liftBuildingVertexToTerrain(vertex, elevationAt) {
+  if (!vertex || ![vertex.x, vertex.y, vertex.z].every(Number.isFinite)) {
+    throw new TypeError('NYC building vertex must have finite coordinates.');
+  }
+  if (typeof elevationAt !== 'function') {
+    throw new TypeError('NYC building terrain sampler must be a function.');
+  }
+  const elevation = elevationAt(vertex.x, vertex.z);
+  if (!Number.isFinite(elevation)) {
+    throw new Error('No validated DEM elevation for NYC building vertex at '
+      + vertex.x.toFixed(1) + ' m, ' + vertex.z.toFixed(1) + ' m.');
+  }
+  return { x: vertex.x, y: vertex.y + elevation, z: vertex.z };
+}
