@@ -218,6 +218,36 @@ assert.equal(terrainGraph.getSegment('one-way').geometry[1].y, 2.5,
 assert.equal(terrainGraph.getSegment('one-way').geometry[2].y, 3,
   'ground-road endpoint height agrees with the sampled graph node');
 
+// A node shared by adjacent spatial tiles has source CSCL y=0 in each tile.
+// The runtime graph replaces that source y with the DEM height, so duplicate
+// detection must compare canonicalized elevations rather than source y=0.
+const [node0, node1, node2] = fixture.graph.nodes;
+const [oneWayEdge, twoWayEdge] = fixture.graph.edges;
+const duplicateGroundTileA = {
+  ...structuredClone(fixture), id:'ground-tile-a',
+  graph:{nodes:[structuredClone(node0),structuredClone(node1)],edges:[structuredClone(oneWayEdge)]},
+};
+const duplicateGroundTileB = {
+  ...structuredClone(fixture), id:'ground-tile-b',
+  graph:{nodes:[structuredClone(node1),structuredClone(node2)],edges:[structuredClone(twoWayEdge)]},
+};
+const sharedNodeGraph = new NYCGISRoadGraph(
+  [duplicateGroundTileA, duplicateGroundTileB],
+  {x:0,y:0,z:0},
+  (x,z) => 35 + x * 0.01 + z * 0.02,
+);
+assert.equal(sharedNodeGraph.getIntersection('n1').position.y, 36,
+  'a shared ground node keeps its canonical DEM elevation when repeated across tiles');
+assert.equal(sharedNodeGraph.getLoadedTileCount(),2,
+  'both neighbouring tiles remain resident after merging their shared endpoint');
+
+// Duplicate source coordinates must still be rejected when genuinely inconsistent.
+assert.throws(() => sharedNodeGraph.addTiles([{
+  ...structuredClone(fixture), id:'conflicting-node-tile',
+  graph:{nodes:[makeNode('n1',100.1,0,2)],edges:[]},
+}]), /Conflicting duplicate node n1/,
+'canonicalizing the DEM height must not hide a real horizontal node conflict');
+
 const bridgeFixture = structuredClone(fixture);
 bridgeFixture.id = 'bridge-fixture';
 bridgeFixture.graph.nodes = [
