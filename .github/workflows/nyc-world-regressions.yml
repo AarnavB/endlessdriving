@@ -122,8 +122,8 @@ jobs:
           test "$CITY_URBAN_RESULT" = success
           test "$CITY_ROUTING_RESULT" = success
           test "$WORLD_RESULT" = success
-          printf 'test:nyc-road-graph: %s\\n' "$NYC_GRAPH_RESULT"
-          printf 'test:nyc-terrain: %s\\n' "$NYC_TERRAIN_RESULT"
+          printf 'test:nyc-road-graph: %s\n' "$NYC_GRAPH_RESULT"
+          printf 'test:nyc-terrain: %s\n' "$NYC_TERRAIN_RESULT"
           test "$BUILD_RESULT" = success
           test "$NYC_BAKE_RESULT" = success
           test "$NYC_GRAPH_RESULT" = success
