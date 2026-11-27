@@ -3,7 +3,7 @@
  * terrain mesh and static collision, then apply the requested small render lift.
  */
 export function drapeAtGradeRoadVertex(point, verticalOffsetM, elevationAt) {
-  if (!point || ![point.x, point.y, point.z, verticalOffsetM].every(Number.isFinite)
+  if (!point || ![point.x, point.z, verticalOffsetM].every(Number.isFinite)
     || typeof elevationAt !== 'function') {
     throw new RangeError('Invalid input for NYC at-grade road surface draping.');
   }
