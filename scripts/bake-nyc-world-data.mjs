@@ -200,7 +200,6 @@ async function main() {
     const sourceNodingDiagnostics = cached.graph.diagnostics.intersectionNoding;
     const cachedPathCount = cached.features.reduce((count, feature) => count + feature.paths.length, 0);
     if (sourceNodingDiagnostics.pathsAfter !== cachedPathCount
-      || sourceNodingDiagnostics.pathsBefore < sourceNodingDiagnostics.pathsAfter
       || sourceNodingDiagnostics.sameLevelEndpointInteriorCount
         + sourceNodingDiagnostics.sameLevelInteriorInteriorCount <= 0) {
       throw new Error('Cached NYC CSCL source-noding audit does not match the retained normalized paths.');
@@ -208,7 +207,7 @@ async function main() {
     const graph = buildCSCLRoadGraph(cached.features);
     graph.diagnostics.intersectionNoding = sourceNodingDiagnostics;
     payload = { ...cached, graph };
-    process.stdout.write('Re-indexing the retained normalized NYC CSCL source features.\\n');
+    process.stdout.write('Re-indexing the retained normalized NYC CSCL source features.\n');
   } else {
     const sourceFeatures = await downloadCSCL(bounds);
     if (sourceFeatures.length === 0) throw new Error('CSCL query returned no road features.');
