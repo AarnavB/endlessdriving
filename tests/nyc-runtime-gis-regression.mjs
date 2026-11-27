@@ -266,7 +266,9 @@ assert.match(manager,/instanceof NYCGISRoadGraph/,'physical road generation bran
 assert.match(manager,/NYCBuildingFootprintLoader/,'GIS world requires the authoritative building loader');
 assert.match(manager,/ExtrudeGeometry/,'building footprints are extruded from source polygons');
 assert.match(manager,/clipTriangleToBounds/,'building geometry is clipped to streamed chunk bounds');
-assert.match(manager,/centroidBounds/,'DEM tiles are loaded for off-chunk building centroids');
+assert.match(manager,/requestedBuildingBounds/,'DEM tile coverage is derived from the requested streamed chunk');
+assert.match(manager,/chunkTerrainTiles/,'chunk DEM tiles are loaded before building vertex sampling');
+assert.match(manager,/liftBuildingVertexToTerrain/,'each clipped building vertex is aligned to its own validated DEM elevation');
 assert.match(manager,/nyc-authoritative-building-footprints/,'rendered buildings are named as source footprint geometry');
 assert.match(traffic,/getDirectedEdgesNear/,'traffic spawn is selected from nearby directed GIS edges');
 assert.match(traffic,/instanceof NYCGISRoadGraph/,'traffic has a dedicated GIS runtime path');
