@@ -20,9 +20,11 @@
     "bake:nyc:buildings": "node scripts/bake-nyc-building-data.mjs",
     "bake:nyc:terrain": "node scripts/bake-nyc-terrain-data.mjs",
     "test:nyc-terrain": "node tests/nyc-terrain-regression.mjs",
-    "bake:nyc:world": "npm run bake:nyc:roads && npm run bake:nyc:buildings && npm run bake:nyc:terrain",
+    "bake:nyc:world": "npm run bake:nyc:roads && npm run bake:nyc:buildings && npm run index:nyc:buildings && npm run bake:nyc:terrain",
     "test:nyc-terrain-sampling": "node tests/nyc-terrain-sampling-regression.mjs",
-    "test:nyc-building-geometry": "node tests/nyc-building-geometry-regression.mjs"
+    "test:nyc-building-geometry": "node tests/nyc-building-geometry-regression.mjs",
+    "reindex:nyc:roads": "node scripts/bake-nyc-world-data.mjs --input-network public/data/nyc/nyc-street-network.json",
+    "index:nyc:buildings": "node scripts/index-nyc-building-footprints.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

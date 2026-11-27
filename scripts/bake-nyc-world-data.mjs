@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   buildBakedStreetNetwork,
+  buildCSCLRoadGraph,
   CSCL_DEFAULT_BOUNDS,
 } from './nyc-street-data-core.mjs';
 
@@ -14,7 +15,7 @@ const MAX_FEATURES = PAGE_SIZE * MAX_PAGES;
 const REQUEST_TIMEOUT_MS = 45000;
 
 function parseArgs(argv) {
-  const values = { ...CSCL_DEFAULT_BOUNDS, outDir: 'public/data/nyc' };
+  const values = { ...CSCL_DEFAULT_BOUNDS, outDir: 'public/data/nyc', inputNetwork: null };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (!arg.startsWith('--')) throw new Error('Unexpected argument: ' + arg);
@@ -22,6 +23,7 @@ function parseArgs(argv) {
     const value = inlineValue ?? argv[++index];
     if (value === undefined) throw new Error('Missing value for --' + key);
     if (key === 'out-dir') values.outDir = value;
+    else if (key === 'input-network') values.inputNetwork = value;
     else if (['north', 'south', 'east', 'west'].includes(key)) values[key] = Number(value);
     else throw new Error('Unknown option: --' + key);
   }
@@ -175,13 +177,29 @@ async function writeSpatialTiles(outDir, payload, tileSizeM = 512) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const bounds = {
+  let bounds = {
     north: options.north, south: options.south,
     east: options.east, west: options.west,
   };
-  const sourceFeatures = await downloadCSCL(bounds);
-  if (sourceFeatures.length === 0) throw new Error('CSCL query returned no road features.');
-  const payload = buildBakedStreetNetwork(sourceFeatures, bounds);
+  let payload;
+  if (options.inputNetwork) {
+    const cachedPath = resolve(options.inputNetwork);
+    const cached = JSON.parse(await readFile(cachedPath, 'utf8'));
+    if (cached?.schema !== 'endless-driving.nyc-street-network'
+      || cached.schemaVersion !== 3 || !Array.isArray(cached.features)
+      || cached.features.length === 0 || !cached.bounds) {
+      throw new Error('Cached NYC road network is not a validated normalized CSCL source snapshot.');
+    }
+    bounds = cached.bounds;
+    // Rebuild only the graph and spatial tiles. The expensive CSCL API query
+    // and source-geometry normalization are already represented in this file.
+    payload = { ...cached, graph: buildCSCLRoadGraph(cached.features) };
+    process.stdout.write('Re-indexing the retained normalized NYC CSCL source features.\\n');
+  } else {
+    const sourceFeatures = await downloadCSCL(bounds);
+    if (sourceFeatures.length === 0) throw new Error('CSCL query returned no road features.');
+    payload = buildBakedStreetNetwork(sourceFeatures, bounds);
+  }
   if (payload.counts.retainedFeatures === 0) {
     throw new Error('No constructed drivable CSCL segments survived normalization.');
   }
