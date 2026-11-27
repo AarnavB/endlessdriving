@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { calculateFootprintBounds, boundsOverlap } from '../src/world/nyc/nyc-building-geometry-core.mjs';
 
 const root = resolve('public/data/nyc');
 const manifestBytes = await readFile(resolve(root, 'manifest.json'));
@@ -29,7 +30,7 @@ const buildingRoot = resolve(root, 'buildings');
 const buildingManifestBytes = await readFile(resolve(buildingRoot, 'manifest.json'));
 const buildingManifest = JSON.parse(buildingManifestBytes.toString('utf8'));
 assert.equal(buildingManifest.schema, 'endless-driving.nyc-building-network');
-assert.equal(buildingManifest.schemaVersion, 2);
+assert.equal(buildingManifest.schemaVersion, 3);
 assert.ok(buildingManifest.retrievedAt);
 assert.equal(buildingManifest.source.sourceHorizontalCrs, 'WGS 84 longitude/latitude (EPSG:4326)');
 assert.equal(buildingManifest.source.runtimeCoordinateFrame, 'local ENU metres (+X east, +Y up, +Z north)');
@@ -45,6 +46,7 @@ assert.equal(buildingManifest.counts.tiles, buildingManifest.tiles.length);
 
 const uniqueBuildings = new Map();
 let buildingTileRows = 0;
+let crossTileFootprintCount = 0;
 for (const record of buildingManifest.tiles) {
   const bytes = await readFile(resolve(buildingRoot, record.path));
   assert.equal(bytes.byteLength, record.bytes, 'building tile bytes: ' + record.id);
@@ -52,8 +54,10 @@ for (const record of buildingManifest.tiles) {
     'building tile checksum: ' + record.id);
   const tile = JSON.parse(bytes.toString('utf8'));
   assert.equal(tile.schema, 'endless-driving.nyc-building-tile');
-  assert.equal(tile.schemaVersion, 1);
+  assert.equal(tile.schemaVersion, 2);
   assert.equal(tile.id, record.id);
+  assert.deepEqual(tile.footprintBounds, record.footprintBounds,
+    'owner tile advertises the union bounds used by chunk lookup');
   assert.equal(tile.buildings.length, record.buildingCount);
   for (const building of tile.buildings) {
     buildingTileRows++;
@@ -61,6 +65,14 @@ for (const record of buildingManifest.tiles) {
     assert.ok(Number.isFinite(building.heightM) && building.heightM >= 2.5);
     assert.ok(['height_roof','feature-code-median','configurable-fallback'].includes(building.heightSource));
     assert.ok(Array.isArray(building.polygons) && building.polygons.length > 0);
+    assert.deepEqual(building.bounds, calculateFootprintBounds(building.polygons),
+      'each footprint carries bounds derived from all polygon rings');
+    assert.ok(boundsOverlap(tile.footprintBounds, building.bounds),
+      'owner tile index includes off-centre building geometry');
+    if (building.bounds.minX < record.bounds.minX || building.bounds.maxX > record.bounds.maxX
+      || building.bounds.minZ < record.bounds.minZ || building.bounds.maxZ > record.bounds.maxZ) {
+      crossTileFootprintCount++;
+    }
     for (const polygon of building.polygons) {
       assert.ok(polygon.length > 0);
       for (const ring of polygon) {
@@ -77,6 +89,8 @@ for (const record of buildingManifest.tiles) {
 }
 assert.equal(uniqueBuildings.size, buildingManifest.counts.retainedBuildings);
 assert.equal(buildingTileRows, buildingManifest.counts.retainedBuildings);
+assert.ok(crossTileFootprintCount > 0,
+  'the source dataset contains footprints crossing their centroid owner tile');
 assert.equal(
   buildingManifest.counts.sourceHeightCount + buildingManifest.counts.inferredHeightCount,
   buildingManifest.counts.retainedBuildings,
@@ -251,6 +265,8 @@ assert.match(manager,/loadTilesForBounds/,'world streaming requests GIS tiles fo
 assert.match(manager,/instanceof NYCGISRoadGraph/,'physical road generation branches on authoritative GIS graph');
 assert.match(manager,/NYCBuildingFootprintLoader/,'GIS world requires the authoritative building loader');
 assert.match(manager,/ExtrudeGeometry/,'building footprints are extruded from source polygons');
+assert.match(manager,/clipTriangleToBounds/,'building geometry is clipped to streamed chunk bounds');
+assert.match(manager,/centroidBounds/,'DEM tiles are loaded for off-chunk building centroids');
 assert.match(manager,/nyc-authoritative-building-footprints/,'rendered buildings are named as source footprint geometry');
 assert.match(traffic,/getDirectedEdgesNear/,'traffic spawn is selected from nearby directed GIS edges');
 assert.match(traffic,/instanceof NYCGISRoadGraph/,'traffic has a dedicated GIS runtime path');
@@ -267,6 +283,7 @@ try {
   const builtBuildingManifest = JSON.parse(
     (await readFile(resolve('dist/data/nyc/buildings/manifest.json'))).toString('utf8'),
   );
+  assert.equal(builtBuildingManifest.schemaVersion,3);
   assert.equal(builtBuildingManifest.counts.retainedBuildings,buildingManifest.counts.retainedBuildings,
     'Vite bundle carries the matching building manifest');
   const builtBuildingTile = buildingManifest.tiles[0];

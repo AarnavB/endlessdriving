@@ -12,6 +12,7 @@ import { NYCBuildingFootprintLoader } from './NYCBuildingFootprintLoader';
 import type { NYCBuildingFootprint } from './NYCBuildingFootprintLoader';
 import { NYCTerrainLoader } from './NYCTerrainLoader';
 import { localBoundsToGeographic } from './NYCGeo';
+import { boundsOverlap, clipTriangleToBounds } from './nyc-building-geometry-core.mjs';
 import {
   CitySpatialIndex,
   citySpatialHash,
@@ -454,7 +455,12 @@ export class NYCCityChunkManager {
         return -getHudsonRiverDepthM(worldX, worldZ) - 1.25;
       }
       // DEM heights are relative to the same sampled NAVD88 origin as the road graph.
-      return this.terrainLoader?.getHeightAtLocal(worldX, worldZ) ?? 0;
+      const elevation = this.terrainLoader?.getHeightAtLocal(worldX, worldZ) ?? null;
+      if (elevation === null || !Number.isFinite(elevation)) {
+        throw new Error('No validated NYC DEM elevation within the bounded NoData search at '
+          + worldX.toFixed(1) + ' m, ' + worldZ.toFixed(1) + ' m.');
+      }
+      return elevation;
     }
     if (isHudsonWater(worldX, worldZ)) {
       return -getHudsonRiverDepthM(worldX, worldZ) - 1.25;
@@ -561,16 +567,41 @@ export class NYCCityChunkManager {
       let buildingFootprints: NYCBuildingFootprint[] = [];
       if (this.graph instanceof NYCGISRoadGraph) {
         if (!this.buildingLoader) throw new Error('GIS world streaming requires NYC building footprint loader.');
-        const buildingTiles = await this.buildingLoader.loadTilesForBounds({
+        const requestedBuildingBounds = {
           minX: cx * CITY_CHUNK_SIZE_M,
           maxX: (cx + 1) * CITY_CHUNK_SIZE_M,
           minZ: cz * CITY_CHUNK_SIZE_M,
           maxZ: (cz + 1) * CITY_CHUNK_SIZE_M,
-        });
-        if (buildingTiles.length === 0) {
-          throw new Error('No authoritative NYC building tiles cover requested world chunk ' + key + '.');
+        };
+        const buildingTiles = await this.buildingLoader.loadTilesForBounds(requestedBuildingBounds);
+        const uniqueBuildings = new Map<string, NYCBuildingFootprint>();
+        for (const tile of buildingTiles) {
+          for (const building of tile.buildings) {
+            if (boundsOverlap(building.bounds, requestedBuildingBounds)) {
+              uniqueBuildings.set(building.id, building);
+            }
+          }
         }
-        buildingFootprints = buildingTiles.flatMap((tile) => tile.buildings);
+        buildingFootprints = [...uniqueBuildings.values()];
+        // A large footprint may be owned by a distant centroid tile. Load the
+        // DEM covering those centroids before sampling each building's base.
+        if (buildingFootprints.length > 0) {
+          const centroidBounds = buildingFootprints.reduce((bounds, building) => ({
+            minX: Math.min(bounds.minX, building.centroid.x),
+            maxX: Math.max(bounds.maxX, building.centroid.x),
+            minZ: Math.min(bounds.minZ, building.centroid.z),
+            maxZ: Math.max(bounds.maxZ, building.centroid.z),
+          }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+          const centroidTerrainTiles = await this.terrainLoader.loadTilesForBounds(localBoundsToGeographic({
+            minX: centroidBounds.minX - 24,
+            maxX: centroidBounds.maxX + 24,
+            minZ: centroidBounds.minZ - 24,
+            maxZ: centroidBounds.maxZ + 24,
+          }));
+          if (centroidTerrainTiles.length === 0) {
+            throw new Error('No validated NYC DEM tiles cover building base elevations for world chunk ' + key + '.');
+          }
+        }
       }
       if (this.disposed || !this.desired.has(key) || this.chunks.has(key)) return;
       const chunk = this.buildChunk(cx, cz, buildingFootprints);
@@ -909,23 +940,36 @@ export class NYCCityChunkManager {
             steps: 1,
             curveSegments: 1,
           });
-          extrusion.rotateX(-Math.PI / 2);
-          const attribute = extrusion.getAttribute('position');
-          const base = gisBuildingPositions.length / 3;
-          for (let i = 0; i < attribute.count; i++) {
-            gisBuildingPositions.push(
-              attribute.getX(i),
-              attribute.getY(i) + groundElevationM,
-              attribute.getZ(i),
-            );
+          try {
+            extrusion.rotateX(-Math.PI / 2);
+            const attribute = extrusion.getAttribute('position');
+            const sourceIndex = extrusion.getIndex();
+            const sourceCount = sourceIndex ? sourceIndex.count : attribute.count;
+            // Clip each extruded triangle to this streamed chunk. The same
+            // result feeds the visible mesh and Rapier collider, so full
+            // building footprints are not duplicated across adjacent chunks.
+            for (let triangle = 0; triangle + 2 < sourceCount; triangle += 3) {
+              const vertices = [0, 1, 2].map((corner) => {
+                const vertex = sourceIndex ? sourceIndex.getX(triangle + corner) : triangle + corner;
+                return {
+                  x: attribute.getX(vertex) + centerX,
+                  y: attribute.getY(vertex) + groundElevationM,
+                  z: attribute.getZ(vertex) + centerZ,
+                };
+              }) as [{x:number;y:number;z:number},{x:number;y:number;z:number},{x:number;y:number;z:number}];
+              const clipped = clipTriangleToBounds(vertices, chunkBounds);
+              if (clipped.length < 3) continue;
+              const base = gisBuildingPositions.length / 3;
+              for (const point of clipped) {
+                gisBuildingPositions.push(point.x - centerX, point.y, point.z - centerZ);
+              }
+              for (let index = 1; index < clipped.length - 1; index++) {
+                gisBuildingIndices.push(base, base + index, base + index + 1);
+              }
+            }
+          } finally {
+            extrusion.dispose();
           }
-          const index = extrusion.getIndex();
-          if (index) {
-            for (let i = 0; i < index.count; i++) gisBuildingIndices.push(base + index.getX(i));
-          } else {
-            for (let i = 0; i < attribute.count; i++) gisBuildingIndices.push(base + i);
-          }
-          extrusion.dispose();
         }
       }
     }
